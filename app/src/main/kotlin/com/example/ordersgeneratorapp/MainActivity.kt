@@ -1,6 +1,7 @@
 package com.example.ordersgeneratorapp
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -59,6 +60,28 @@ fun OrdersGeneratorApp() {
     LaunchedEffect(connectionSettings) {
         alpacaRepository.updateSettings(connectionSettings.alpaca)
     }
+
+    LaunchedEffect(connectionSettings.brokerAccounts) {
+        alpacaRepository.ensureConfiguredForFirstEnabledAccount(connectionSettings)
+        connectionSettings.brokerAccounts.forEach { acct ->
+            alpacaRepository.configureFromBrokerAccount(acct)
+        }
+    }
+
+    val onSettingsChanged: (ConnectionSettings) -> Unit = { newConnectionSettings ->
+        // ✅ Update connectionSettings state AND save to SettingsManager
+        connectionSettings = newConnectionSettings
+        settingsManager.saveConnectionSettings(newConnectionSettings)
+        
+        // ✅ Force trigger recomposition by updating appSettings as well
+        val updatedAppSettings = appSettings.copy(
+            connectionSettings = newConnectionSettings
+        )
+        appSettings = updatedAppSettings
+        settingsManager.saveAppSettings(updatedAppSettings)
+        
+        Log.d("MainActivity", "Updated connection settings with ${newConnectionSettings.brokerAccounts.size} broker accounts")
+    }
     
     NavHost(
         navController = navController,
@@ -70,7 +93,8 @@ fun OrdersGeneratorApp() {
                 onNavigateToSettings = { navController.navigate("connection_settings") },
                 onNavigateToOrderPlacement = { navController.navigate("order_placement") },
                 onNavigateToOrderHistory = { navController.navigate("order_history") },
-                onNavigateToMarketData = { navController.navigate("market_data") }
+                onNavigateToMarketData = { navController.navigate("market_data") },
+                onNavigateToHotkeys = { navController.navigate("hotkey_settings") }
             )
         }
         
@@ -99,10 +123,7 @@ fun OrdersGeneratorApp() {
             ConnectionSettingsScreen(
                 onBackClick = { navController.popBackStack() },
                 connectionSettings = connectionSettings,
-                onSettingsChanged = { newSettings ->
-                    connectionSettings = newSettings
-                    settingsManager.saveConnectionSettings(newSettings)
-                },
+                onSettingsChanged = onSettingsChanged,
                 onNavigateToHotkeys = { navController.navigate("hotkey_settings") }
             )
         }
@@ -111,6 +132,7 @@ fun OrdersGeneratorApp() {
             HotkeySettingsScreen(
                 onBackClick = { navController.popBackStack() },
                 hotkeySettings = appSettings.hotkeySettings,
+                connectionSettings = connectionSettings,
                 onHotkeySettingsChanged = { newHotkeySettings ->
                     val updatedAppSettings = appSettings.copy(hotkeySettings = newHotkeySettings)
                     appSettings = updatedAppSettings

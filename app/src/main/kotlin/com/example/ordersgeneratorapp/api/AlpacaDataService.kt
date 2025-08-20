@@ -4,63 +4,52 @@ import retrofit2.Response
 import retrofit2.http.*
 
 interface AlpacaDataService {
-    
-    // Latest quote endpoints
-    @GET("v2/stocks/{symbol}/quotes/latest")
-    suspend fun getLatestQuote(@Path("symbol") symbol: String): Response<SingleQuoteResponse>
-    
-    @GET("v2/stocks/quotes/latest")
-    suspend fun getLatestQuotes(@Query("symbols") symbols: String): Response<MultiQuoteResponse>
-    
-    // Latest trade endpoints
-    @GET("v2/stocks/{symbol}/trades/latest")
-    suspend fun getLatestTrade(@Path("symbol") symbol: String): Response<SingleTradeResponse>
-    
-    @GET("v2/stocks/trades/latest")
-    suspend fun getLatestTrades(@Query("symbols") symbols: String): Response<MultiTradeResponse>
-    
-    // Historical quotes
-    @GET("v2/stocks/{symbol}/quotes")
-    suspend fun getHistoricalQuotes(
-        @Path("symbol") symbol: String,
-        @Query("start") start: String? = null,
-        @Query("end") end: String? = null,
-        @Query("limit") limit: Int? = null,
-        @Query("page_token") pageToken: String? = null,
-        @Query("timeframe") timeframe: String? = null
-    ): Response<HistoricalQuotesResponse>
-    
-    // Historical trades
-    @GET("v2/stocks/{symbol}/trades")
-    suspend fun getHistoricalTrades(
-        @Path("symbol") symbol: String,
-        @Query("start") start: String? = null,
-        @Query("end") end: String? = null,
-        @Query("limit") limit: Int? = null,
-        @Query("page_token") pageToken: String? = null,
-        @Query("timeframe") timeframe: String? = null
-    ): Response<HistoricalTradesResponse>
-    
-    // Historical bars (OHLCV)
-    @GET("v2/stocks/{symbol}/bars")
-    suspend fun getHistoricalBars(
-        @Path("symbol") symbol: String,
-        @Query("start") start: String? = null,
-        @Query("end") end: String? = null,
-        @Query("limit") limit: Int? = null,
-        @Query("page_token") pageToken: String? = null,
-        @Query("timeframe") timeframe: String = "1Day",
-        @Query("adjustment") adjustment: String = "raw"
-    ): Response<HistoricalBarsResponse>
-    
-    // Snapshots
     @GET("v2/stocks/{symbol}/snapshot")
     suspend fun getSnapshot(@Path("symbol") symbol: String): Response<SnapshotResponse>
     
     @GET("v2/stocks/snapshots")
     suspend fun getSnapshots(@Query("symbols") symbols: String): Response<SnapshotsResponse>
     
-    // News
+    @GET("v2/stocks/{symbol}/quotes/latest")
+    suspend fun getLatestQuote(@Path("symbol") symbol: String): Response<SingleQuoteResponse>
+
+    @GET("v2/stocks/{symbol}/trades/latest")
+    suspend fun getLatestTrade(@Path("symbol") symbol: String): Response<SingleTradeResponse>
+
+    @GET("v2/stocks/quotes")
+    suspend fun getQuotes(@Query("symbols") symbols: String): Response<MultiQuoteResponse>
+
+    @GET("v2/stocks/trades")
+    suspend fun getTrades(@Query("symbols") symbols: String): Response<MultiTradeResponse>
+
+    @GET("v2/stocks/{symbol}/quotes")
+    suspend fun getHistoricalQuotes(
+        @Path("symbol") symbol: String,
+        @Query("start") start: String? = null,
+        @Query("end") end: String? = null,
+        @Query("limit") limit: Int = 1000,
+        @Query("page_token") pageToken: String? = null
+    ): Response<HistoricalQuotesResponse>
+
+    @GET("v2/stocks/{symbol}/trades")
+    suspend fun getHistoricalTrades(
+        @Path("symbol") symbol: String,
+        @Query("start") start: String? = null,
+        @Query("end") end: String? = null,
+        @Query("limit") limit: Int = 1000,
+        @Query("page_token") pageToken: String? = null
+    ): Response<HistoricalTradesResponse>
+
+    @GET("v2/stocks/{symbol}/bars")
+    suspend fun getHistoricalBars(
+        @Path("symbol") symbol: String,
+        @Query("start") start: String,
+        @Query("end") end: String,
+        @Query("timeframe") timeframe: String = "1Day",
+        @Query("limit") limit: Int = 1000,
+        @Query("page_token") pageToken: String? = null
+    ): Response<HistoricalBarsResponse>
+
     @GET("v1beta1/news")
     suspend fun getNews(
         @Query("symbols") symbols: String? = null,
@@ -74,7 +63,7 @@ interface AlpacaDataService {
     ): Response<NewsResponse>
 }
 
-// Data models for market data
+// ✅ API Data models - keep only these, NO duplicates
 data class QuoteData(
     val t: String, // timestamp
     val ax: String, // ask exchange
@@ -152,32 +141,41 @@ data class Snapshot(
 )
 
 data class SnapshotResponse(
-    val snapshot: Snapshot
+    val trade: TradeData?,
+    val quote: QuoteData?,
+    val dailyBar: BarData?,
+    val minuteBar: BarData?,
+    val prevDailyBar: BarData?
 )
 
 data class SnapshotsResponse(
-    val snapshots: Map<String, Snapshot>
+    val snapshots: Map<String, SnapshotResponse>
 )
 
-data class NewsArticle(
+data class BarData(
+    val t: String, // timestamp
+    val o: Double, // open
+    val h: Double, // high
+    val l: Double, // low
+    val c: Double, // close
+    val v: Long,   // volume
+    val n: Int     // number of trades
+)
+
+data class NewsResponse(
+    val news: List<NewsItem>,
+    val next_page_token: String?
+)
+
+data class NewsItem(
     val id: String,
     val headline: String,
     val author: String,
     val created_at: String,
     val updated_at: String,
     val summary: String,
-    val content: String?,
-    val images: List<NewsImage>?,
-    val symbols: List<String>,
-    val url: String?
+    val url: String,
+    val symbols: List<String>
 )
 
-data class NewsImage(
-    val size: String,
-    val url: String
-)
-
-data class NewsResponse(
-    val news: List<NewsArticle>,
-    val next_page_token: String?
-)
+// ✅ NO extension functions here - they are ONLY in MarketData.kt

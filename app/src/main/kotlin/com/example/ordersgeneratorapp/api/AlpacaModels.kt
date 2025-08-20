@@ -84,13 +84,19 @@ data class CreateOrderRequest(
     val limitPrice: String? = null,
     @SerializedName("stop_price")
     val stopPrice: String? = null,
+    @SerializedName("client_order_id")
     val clientOrderId: String? = null,
     val extendedHours: Boolean? = null,
     val orderClass: String? = null,
+    @SerializedName("take_profit_limit_price")
     val takeProfitLimitPrice: String? = null,
+    @SerializedName("stop_loss_stop_price")
     val stopLossStopPrice: String? = null,
+    @SerializedName("stop_loss_limit_price")
     val stopLossLimitPrice: String? = null,
+    @SerializedName("trail_price")
     val trailPrice: String? = null,
+    @SerializedName("trail_percent")
     val trailPercent: String? = null
 )
 
@@ -113,6 +119,7 @@ data class AlpacaPosition(
     val unrealizedPlpc: String,
     val unrealizedIntradayPl: String,
     val unrealizedIntradayPlpc: String,
+    @SerializedName("current_price")
     val currentPrice: String,
     val lastdayPrice: String,
     val changeToday: String,

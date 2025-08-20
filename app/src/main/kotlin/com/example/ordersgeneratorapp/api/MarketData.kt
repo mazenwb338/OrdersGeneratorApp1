@@ -1,12 +1,10 @@
 package com.example.ordersgeneratorapp.api
 
-// Legacy compatibility models for UI layer
 data class MarketData(
     val symbol: String,
     val quote: Quote?,
     val trade: Trade?,
-    val timestamp: String,
-    val pendingOrders: List<AlpacaOrder> = emptyList()
+    val timestamp: String
 )
 
 data class Quote(
@@ -40,7 +38,7 @@ data class TradesResponse(
     val trades: Map<String, Trade>
 )
 
-// ✅ FIX: Use correct data types for extension functions
+// ✅ Extension functions to convert new API responses to legacy format (ONLY HERE!)
 fun QuoteData.toLegacyQuote(): Quote = Quote(
     bidPrice = this.bp.toString(),
     bidSize = this.bs.toString(),

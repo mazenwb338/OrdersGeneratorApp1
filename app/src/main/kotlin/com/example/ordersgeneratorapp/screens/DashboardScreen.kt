@@ -1,8 +1,11 @@
 package com.example.ordersgeneratorapp.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -26,7 +29,8 @@ fun DashboardScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToOrderPlacement: () -> Unit,
     onNavigateToOrderHistory: () -> Unit,
-    onNavigateToMarketData: () -> Unit
+    onNavigateToMarketData: () -> Unit,
+    onNavigateToHotkeys: () -> Unit = {}
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     
@@ -120,7 +124,8 @@ fun DashboardScreen(
                 QuickActionsCard(
                     onNavigateToOrderPlacement = onNavigateToOrderPlacement,
                     onNavigateToOrderHistory = onNavigateToOrderHistory,
-                    onNavigateToMarketData = onNavigateToMarketData
+                    onNavigateToMarketData = onNavigateToMarketData,
+                    onNavigateToHotkeys = onNavigateToHotkeys
                 )
             }
             
@@ -215,7 +220,7 @@ private fun ConnectionStatusCard(
             if (!isConnected && !isLoading) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(onClick = onRetryClick) {
-                    Text("Retry")
+                    Text("Retry Connection", color = MaterialTheme.colorScheme.onPrimary)
                 }
             }
         }
@@ -226,7 +231,8 @@ private fun ConnectionStatusCard(
 private fun QuickActionsCard(
     onNavigateToOrderPlacement: () -> Unit,
     onNavigateToOrderHistory: () -> Unit,
-    onNavigateToMarketData: () -> Unit
+    onNavigateToMarketData: () -> Unit,
+    onNavigateToHotkeys: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -251,15 +257,21 @@ private fun QuickActionsCard(
                 )
                 
                 QuickActionButton(
+                    icon = Icons.Default.ShowChart,
+                    text = "Market Data",
+                    onClick = onNavigateToMarketData
+                )
+                
+                QuickActionButton(
                     icon = Icons.Default.History,
                     text = "Order History",
                     onClick = onNavigateToOrderHistory
                 )
                 
                 QuickActionButton(
-                    icon = Icons.Default.TrendingUp,
-                    text = "Market Data",
-                    onClick = onNavigateToMarketData
+                    icon = Icons.Default.Settings,
+                    text = "Hotkeys",
+                    onClick = onNavigateToHotkeys
                 )
             }
         }
@@ -274,23 +286,26 @@ private fun QuickActionButton(
 ) {
     Card(
         onClick = onClick,
-        modifier = Modifier.size(80.dp)
+        modifier = Modifier.size(width = 80.dp, height = 90.dp)
     ) {
         Column(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = text,
+                modifier = Modifier.size(24.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = text,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Medium
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
         }
     }
@@ -314,30 +329,38 @@ private fun AccountCard(
             Spacer(modifier = Modifier.height(16.dp))
             
             if (isLoading) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Loading account information...")
+                    CircularProgressIndicator()
                 }
             } else if (account != null) {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     AccountInfoRow("Account ID", account.id)
-                    AccountInfoRow("Status", account.status)
+                    AccountInfoRow("Account Number", account.accountNumber)
                     AccountInfoRow("Buying Power", "$${account.buyingPower}")
                     AccountInfoRow("Cash", "$${account.cash}")
                     AccountInfoRow("Portfolio Value", "$${account.portfolioValue}")
+                    AccountInfoRow("Equity", "$${account.equity}")
+                    AccountInfoRow("Day Trade Count", account.daytradeCount.toString())
+                    AccountInfoRow("Currency", account.currency)
+                    AccountInfoRow(
+                        "Status", 
+                        account.status,
+                        statusColor = when (account.status) {
+                            "ACTIVE" -> Color(0xFF4CAF50)
+                            else -> Color(0xFFF44336)
+                        }
+                    )
                 }
             } else {
                 Text(
-                    text = "Unable to load account information",
-                    color = MaterialTheme.colorScheme.error
+                    text = "Account data not available",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -346,8 +369,9 @@ private fun AccountCard(
 
 @Composable
 private fun AccountInfoRow(
-    label: String,
-    value: String
+    label: String, 
+    value: String, 
+    statusColor: Color? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -361,7 +385,8 @@ private fun AccountInfoRow(
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium
+            fontWeight = FontWeight.Medium,
+            color = statusColor ?: MaterialTheme.colorScheme.onSurface
         )
     }
 }
@@ -385,8 +410,11 @@ private fun PositionsCard(
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
-                TextButton(onClick = onViewDetails) {
-                    Text("View All")
+                
+                if (positions.isNotEmpty()) {
+                    TextButton(onClick = onViewDetails) {
+                        Text("View All")
+                    }
                 }
             }
             
@@ -394,13 +422,14 @@ private fun PositionsCard(
             
             if (positions.isEmpty()) {
                 Text(
-                    text = "No positions found",
+                    text = "No open positions",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
+                // Show first 3 positions
                 positions.take(3).forEach { position ->
-                    PositionItem(position = position)
+                    PositionRow(position)
                     if (position != positions.take(3).last()) {
                         Spacer(modifier = Modifier.height(8.dp))
                     }
@@ -411,9 +440,7 @@ private fun PositionsCard(
 }
 
 @Composable
-private fun PositionItem(position: AlpacaPosition) {
-    val isProfit = position.unrealizedPl?.toDoubleOrNull()?.let { it >= 0 } ?: false
-    
+private fun PositionRow(position: AlpacaPosition) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -432,18 +459,17 @@ private fun PositionItem(position: AlpacaPosition) {
             )
         }
         
-        Column(
-            horizontalAlignment = Alignment.End
-        ) {
+        Column(horizontalAlignment = Alignment.End) {
             Text(
-                text = position.symbol,
+                text = "$${position.marketValue}",
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium
             )
+            val unrealizedPl = position.unrealizedPl.toDoubleOrNull() ?: 0.0
             Text(
-                text = if (isProfit) "+$${position.unrealizedPl}" else "-$${position.unrealizedPl?.removePrefix("-")}",
+                text = "${if (unrealizedPl >= 0) "+" else ""}$${position.unrealizedPl}",
                 style = MaterialTheme.typography.bodySmall,
-                color = if (isProfit) Color(0xFF4CAF50) else Color(0xFFF44336)
+                color = if (unrealizedPl >= 0) Color(0xFF4CAF50) else Color(0xFFF44336)
             )
         }
     }
@@ -464,12 +490,15 @@ private fun RecentOrdersCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Recent Orders",
+                    text = "Recent Orders (${orders.size})",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
-                TextButton(onClick = onViewHistory) {
-                    Text("View All")
+                
+                if (orders.isNotEmpty()) {
+                    TextButton(onClick = onViewHistory) {
+                        Text("View All")
+                    }
                 }
             }
             
@@ -482,8 +511,9 @@ private fun RecentOrdersCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
+                // Show first 3 orders
                 orders.take(3).forEach { order ->
-                    OrderItem(order = order)
+                    OrderRow(order)
                     if (order != orders.take(3).last()) {
                         Spacer(modifier = Modifier.height(8.dp))
                     }
@@ -494,7 +524,7 @@ private fun RecentOrdersCard(
 }
 
 @Composable
-private fun OrderItem(order: AlpacaOrder) {
+private fun OrderRow(order: AlpacaOrder) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -502,37 +532,39 @@ private fun OrderItem(order: AlpacaOrder) {
     ) {
         Column {
             Text(
-                text = order.symbol,
+                text = "${order.symbol} ${order.side.uppercase()}",
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Medium
             )
             Text(
-                text = "${order.side} ${order.qty}",
+                text = "${order.qty} shares @ ${order.orderType}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            order.clientOrderId?.let {
+                Text(
+                    text = "CID ${it.takeLast(12)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
         
-        Column(
-            horizontalAlignment = Alignment.End
-        ) {
-            Text(
-                text = order.symbol,
-                style = MaterialTheme.typography.bodyMedium
-            )
-            Text(
-                text = order.status,
-                style = MaterialTheme.typography.bodySmall,
-                color = when (order.status.lowercase()) {
-                    "filled" -> Color(0xFF4CAF50)
-                    "canceled", "rejected" -> Color(0xFFF44336)
-                    else -> MaterialTheme.colorScheme.primary
-                }
-            )
-        }
+        Text(
+            text = order.status.uppercase(),
+            style = MaterialTheme.typography.bodySmall,
+            color = when (order.status.lowercase()) {
+                "filled" -> Color(0xFF4CAF50)
+                "canceled" -> Color(0xFFF44336)
+                "pending_new", "new" -> Color(0xFF2196F3)
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 
+// Refresh data function
 private suspend fun refreshData(
     repository: AlpacaRepository,
     onAccountLoaded: (AlpacaAccount?) -> Unit,
@@ -546,37 +578,31 @@ private suspend fun refreshData(
     onError(null)
     
     try {
-        // Simulate network delay
-        delay(1000)
-        
+        // Load account
         val accountResult = repository.getAccount()
-        val accountInfo = if (accountResult.isSuccess) {
-            accountResult.getOrNull()
+        if (accountResult.isSuccess) {
+            onAccountLoaded(accountResult.getOrNull())
+            onConnectionChanged(true)
         } else {
-            null
+            onConnectionChanged(false)
+            onError("Failed to load account: ${accountResult.exceptionOrNull()?.message}")
         }
-        onAccountLoaded(accountInfo)
         
+        // Load positions
         val positionsResult = repository.getPositions()
-        val positions = if (positionsResult.isSuccess) {
-            positionsResult.getOrNull() ?: emptyList()
-        } else {
-            emptyList()
+        if (positionsResult.isSuccess) {
+            onPositionsLoaded(positionsResult.getOrNull() ?: emptyList())
         }
-        onPositionsLoaded(positions)
         
-        val ordersResult = repository.getOrders()
-        val orders = if (ordersResult.isSuccess) {
-            ordersResult.getOrNull() ?: emptyList()
-        } else {
-            emptyList()
+        // Load recent orders
+        val ordersResult = repository.getOrders(limit = 10)
+        if (ordersResult.isSuccess) {
+            onOrdersLoaded(ordersResult.getOrNull() ?: emptyList())
         }
-        onOrdersLoaded(orders)
         
-        onConnectionChanged(accountResult.isSuccess)
     } catch (e: Exception) {
         onConnectionChanged(false)
-        onError(e.message ?: "Unknown error occurred")
+        onError("Connection error: ${e.message}")
     } finally {
         onLoadingChanged(false)
     }

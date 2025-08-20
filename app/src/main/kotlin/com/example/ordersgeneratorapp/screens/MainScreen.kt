@@ -38,7 +38,8 @@ fun MainScreen(
                 onNavigateToSettings = { navController.navigate("connection_settings") },
                 onNavigateToOrderPlacement = { navController.navigate("order_placement") },
                 onNavigateToOrderHistory = { navController.navigate("order_history") },
-                onNavigateToMarketData = { navController.navigate("market_data") }
+                onNavigateToMarketData = { navController.navigate("market_data") },
+                onNavigateToHotkeys = { navController.navigate("hotkey_settings") }
             )
         }
         
@@ -76,6 +77,7 @@ fun MainScreen(
             HotkeySettingsScreen(
                 onBackClick = { navController.popBackStack() },
                 hotkeySettings = appSettings.hotkeySettings,
+                connectionSettings = connectionSettings, // This should now have brokerAccounts
                 onHotkeySettingsChanged = { newHotkeySettings ->
                     val updatedAppSettings = appSettings.copy(hotkeySettings = newHotkeySettings)
                     onAppSettingsChanged(updatedAppSettings)

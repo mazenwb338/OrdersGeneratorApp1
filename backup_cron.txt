@@ -1,0 +1,1 @@
+0 18 * * * /Users/mazenbteddini/OrdersGeneratorApp/auto_backup.sh >> /Users/mazenbteddini/OrdersGeneratorApp/backup.log 2>&1

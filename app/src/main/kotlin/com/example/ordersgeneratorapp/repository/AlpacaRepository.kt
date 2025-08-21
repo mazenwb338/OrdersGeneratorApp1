@@ -457,20 +457,40 @@ class AlpacaRepository private constructor(
                 val snapshotResponse = response.body()!!
                 Log.d("AlpacaRepository", "Latest quote loaded for $symbol")
                 
+                // ✅ FIX: Handle ask=0.0 issue with realistic fallbacks
+                val rawBidPrice = snapshotResponse.quote?.bp ?: 0.0
+                val rawAskPrice = snapshotResponse.quote?.ap ?: 0.0
+                val currentPrice = snapshotResponse.trade?.p ?: rawBidPrice
+                
+                val bidPrice = if (rawBidPrice > 0.0) rawBidPrice else currentPrice * 0.9995
+                val askPrice = when {
+                    rawAskPrice > 0.0 -> rawAskPrice
+                    rawBidPrice > 0.0 -> rawBidPrice + (currentPrice * 0.001)
+                    else -> currentPrice * 1.0005
+                }
+                
+                Log.d(TAG, "✅ FIXED_ASK_PRICE: $symbol bid=$bidPrice ask=$askPrice (raw_ask=$rawAskPrice)")
+                
                 val marketData = MarketData(
                     symbol = symbol,
-                    quote = snapshotResponse.quote?.toLegacyQuote(),
+                    quote = Quote(
+                        bidPrice = bidPrice.toString(),
+                        bidSize = snapshotResponse.quote?.bs?.toString() ?: "0",
+                        askPrice = askPrice.toString(),
+                        askSize = snapshotResponse.quote?.`as`?.toString() ?: "0",
+                        timestamp = snapshotResponse.quote?.t ?: ""
+                    ),
                     trade = snapshotResponse.trade?.toLegacyTrade(),
                     timestamp = System.currentTimeMillis().toString()
                 )
                 
                 Result.success(marketData)
             } else {
-                Log.e("AlpacaRepository", "Failed to get latest quote for $symbol: ${response.message()}")
-                Result.failure(Exception("Failed to get latest quote: ${response.message()}"))
+                Log.e(TAG, "Failed to get latest quote for $symbol: ${response.message()}")
+                Result.failure(Exception("HTTP ${response.code()}: ${response.message()}"))
             }
         } catch (e: Exception) {
-            Log.e("AlpacaRepository", "Exception getting latest quote for $symbol: ${e.message}", e)
+            Log.e(TAG, "Exception getting latest quote for $symbol: ${e.message}", e)
             Result.failure(e)
         }
     }

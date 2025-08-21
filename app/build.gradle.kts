@@ -54,6 +54,12 @@ android {
     }
 }
 
+repositories {
+    google()
+    mavenCentral()
+    maven { url = uri("https://jitpack.io") } // ✅ ADD: For MPAndroidChart
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
@@ -79,6 +85,13 @@ dependencies {
     
     // JSON - FIXED: Added Gson dependency
     implementation("com.google.code.gson:gson:2.10.1")
+    
+    // ✅ ADD: Chart library for future implementation
+    implementation("com.github.PhilJay:MPAndroidChart:v3.1.0")
+    
+    // ✅ ADD: Hilt for dependency injection (if needed later)
+    // implementation("com.google.dagger:hilt-android:2.48")
+    // kapt("com.google.dagger:hilt-compiler:2.48")
     
     // Testing
     testImplementation("junit:junit:4.13.2")

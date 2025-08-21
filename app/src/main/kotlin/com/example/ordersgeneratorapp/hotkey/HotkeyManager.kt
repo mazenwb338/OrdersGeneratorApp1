@@ -105,12 +105,13 @@ class HotkeyManager(
             else -> "UNKNOWN"
         }}")
         
-        result.successfulOrders.forEach { order ->
-            Log.d(TAG, "  ✅ SUCCESS: ${order.detailedSummary}")
+        // ✅ FIX: Use accountResults instead of non-existent properties
+        result.accountResults.filter { it.success }.forEach { order ->
+            Log.d(TAG, "  ✅ SUCCESS: ${order.accountName} - Alpaca ID: ${order.alpacaOrderId} - Client ID: ${order.clientOrderId}")
         }
         
-        result.failedOrders.forEach { order ->
-            Log.e(TAG, "  ❌ FAILED: ${order.detailedSummary}")
+        result.accountResults.filter { !it.success }.forEach { order ->
+            Log.e(TAG, "  ❌ FAILED: ${order.accountName} - Error: ${order.errorMessage}")
         }
     }
 }

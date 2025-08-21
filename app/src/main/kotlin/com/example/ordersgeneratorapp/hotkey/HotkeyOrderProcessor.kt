@@ -101,30 +101,26 @@ class HotkeyOrderProcessor(
                 Log.d(TAG, "  - Status: ${order.status}")
                 
                 AccountOrderResult(
-                    account = account,
+                    accountId = account.id,
+                    accountName = account.accountName,
                     success = true,
                     alpacaOrderId = order.id,
                     clientOrderId = order.clientOrderId ?: clientOrderId,
-                    symbol = order.symbol,
-                    side = order.side,
-                    quantity = order.qty,
-                    status = order.status,
-                    errorMessage = null
+                    errorMessage = null,
+                    executionTimeMs = System.currentTimeMillis()
                 )
             } else {
                 val error = result.exceptionOrNull()?.message ?: "Unknown error"
                 Log.e(TAG, "ACCOUNT_ORDER_FAILED account=${account.accountName} error=$error")
                 
                 AccountOrderResult(
-                    account = account,
+                    accountId = account.id,
+                    accountName = account.accountName,
                     success = false,
                     alpacaOrderId = null,
                     clientOrderId = clientOrderId,
-                    symbol = preset.symbol,
-                    side = side,
-                    quantity = preset.quantity,
-                    status = "FAILED",
-                    errorMessage = error
+                    errorMessage = error,
+                    executionTimeMs = System.currentTimeMillis()
                 )
             }
             
@@ -132,22 +128,20 @@ class HotkeyOrderProcessor(
             Log.e(TAG, "ACCOUNT_ORDER_EXCEPTION account=${account.accountName}", e)
             
             AccountOrderResult(
-                account = account,
+                accountId = account.id,
+                accountName = account.accountName,
                 success = false,
                 alpacaOrderId = null,
                 clientOrderId = "ERROR_${System.currentTimeMillis()}",
-                symbol = preset.symbol,
-                side = side,
-                quantity = preset.quantity,
-                status = "EXCEPTION",
-                errorMessage = e.message ?: "Unknown exception"
+                errorMessage = e.message ?: "Unknown exception",
+                executionTimeMs = System.currentTimeMillis()
             )
         }
     }
 }
 
 /**
- * Result of executing a hotkey across multiple accounts
+ * Result of hotkey execution across multiple accounts
  */
 data class HotkeyExecutionResult(
     val sessionId: String,
@@ -157,41 +151,29 @@ data class HotkeyExecutionResult(
     val successCount: Int,
     val totalCount: Int
 ) {
-    val isFullSuccess: Boolean get() = successCount == totalCount
+    // ✅ ADD: Missing properties that MarketDataScreen expects
+    val isFullSuccess: Boolean get() = successCount == totalCount && totalCount > 0
     val hasPartialSuccess: Boolean get() = successCount > 0 && successCount < totalCount
     val isCompleteFailure: Boolean get() = successCount == 0
     
-    val summary: String get() = "$side ${preset.symbol}: $successCount/$totalCount orders placed"
-    
-    val successfulOrders: List<AccountOrderResult> get() = accountResults.filter { it.success }
-    val failedOrders: List<AccountOrderResult> get() = accountResults.filter { !it.success }
+    val summary: String get() = when {
+        isFullSuccess -> "All orders successful ($successCount/$totalCount)"
+        hasPartialSuccess -> "Partial success ($successCount/$totalCount)"
+        else -> "All orders failed (0/$totalCount)"
+    }
 }
 
 /**
- * Result of executing an order for a single account
+ * Result for individual account order execution
  */
 data class AccountOrderResult(
-    val account: BrokerAccount,
+    val accountId: String,
+    val accountName: String,
     val success: Boolean,
-    val alpacaOrderId: String?, // This is the UNIQUE Alpaca server order ID
-    val clientOrderId: String,   // This is our client-generated unique ID
-    val symbol: String,
-    val side: String,
-    val quantity: String,
-    val status: String,
-    val errorMessage: String?
+    val alpacaOrderId: String? = null,
+    val clientOrderId: String? = null,
+    val errorMessage: String? = null,
+    val executionTimeMs: Long = 0
 ) {
-    val displaySummary: String get() = "${account.accountName}: ${if (success) "✅" else "❌"} $side $symbol"
-    
-    val detailedSummary: String get() = buildString {
-        append("${account.accountName}: ")
-        if (success) {
-            append("✅ $side $quantity x $symbol")
-            append(" | Alpaca ID: $alpacaOrderId")
-            append(" | Status: $status")
-        } else {
-            append("❌ $side $quantity x $symbol")
-            append(" | Error: $errorMessage")
-        }
-    }
+    val statusEmoji: String get() = if (success) "✅" else "❌"
 }

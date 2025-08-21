@@ -7,5 +7,9 @@
         <item name="android:colorBackground">@color/backgroundColor</item>
         <item name="android:windowBackground">@color/backgroundColor</item>
         <item name="android:statusBarColor">@color/colorPrimaryDark</item>
+        <item name="android:navigationBarColor">@color/backgroundColor</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:colorSurface">@color/surfaceColor</item>
     </style>
 </resources>

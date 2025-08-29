@@ -286,6 +286,68 @@ fun OrderHistoryScreen(
         refreshOrdersFromAlpaca()
     }
 
+    // Listen to repository order events for live updates
+    LaunchedEffect(Unit) {
+        alpacaRepository.orderEvents.collect { evt ->
+            when (evt) {
+                is AlpacaRepository.OrderEvent.Created -> {
+                    if (ordersWithAccount.none { it.id == evt.order.id }) {
+                        val o = evt.order
+                        val added = OrderWithAccount(
+                            id = o.id,
+                            clientOrderId = o.clientOrderId,
+                            createdAt = o.createdAt,
+                            updatedAt = o.updatedAt,
+                            submittedAt = o.submittedAt,
+                            filledAt = o.filledAt,
+                            expiredAt = o.expiredAt,
+                            canceledAt = o.canceledAt,
+                            failedAt = o.failedAt,
+                            replacedAt = o.replacedAt,
+                            replacedBy = o.replacedBy,
+                            replaces = o.replaces,
+                            assetId = o.assetId ?: "",
+                            symbol = o.symbol,
+                            assetClass = o.assetClass ?: "us_equity",
+                            notional = o.notional,
+                            qty = o.qty,
+                            filledQty = o.filledQty ?: "0",
+                            filledAvgPrice = o.filledAvgPrice,
+                            orderClass = o.orderClass ?: "simple",
+                            orderType = o.orderType,
+                            side = o.side,
+                            timeInForce = o.timeInForce,
+                            limitPrice = o.limitPrice,
+                            stopPrice = o.stopPrice,
+                            status = o.status,
+                            extendedHours = o.extendedHours ?: false,
+                            legs = emptyList(),
+                            trailPercent = o.trailPercent,
+                            trailPrice = o.trailPrice,
+                            hwm = o.hwm,
+                            commission = o.commission,
+                            accountName = "Current"
+                        )
+                        ordersWithAccount = (ordersWithAccount + added)
+                            .sortedByDescending { it.createdAt }
+                    }
+                }
+                is AlpacaRepository.OrderEvent.Canceled -> {
+                    ordersWithAccount = ordersWithAccount.map {
+                        if (it.id == evt.orderId) it.copy(status = "canceled") else it
+                    }
+                }
+                is AlpacaRepository.OrderEvent.Updated -> {
+                    ordersWithAccount = ordersWithAccount.map {
+                        if (it.id == evt.order.id)
+                            it.copy(status = evt.order.status, filledQty = evt.order.filledQty ?: it.filledQty)
+                        else it
+                    }
+                }
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(

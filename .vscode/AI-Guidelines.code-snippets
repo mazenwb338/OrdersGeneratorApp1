@@ -1,0 +1,27 @@
+{
+	// Place your OrdersGeneratorApp workspace snippets here.
+	// Each snippet is defined under a snippet name and has a scope, prefix, body and description.
+
+	"AI Safe Instruction": {
+		"scope": "plaintext,markdown",
+		"prefix": "ai-safe",
+		"body": [
+			"I am building this app step by step.",
+			"Do not rewrite or remove existing functionality unless I say so.",
+			"Only add the requested feature.",
+			"If you must touch existing code, explain first.",
+			"Show the changes in patch/diff style or inside the specific file/function I mention.",
+			"Keep everything else the same."
+		],
+		"description": "Safe AI coding instructions to enforce incremental build-up approach"
+	},
+
+	"AI Reminder (Short)": {
+		"scope": "plaintext,markdown",
+		"prefix": "ai-remind",
+		"body": [
+			"Only add, don’t rewrite. Keep existing code intact unless I say so. Patch style preferred."
+		],
+		"description": "Short reminder for AI prompts"
+	}
+}

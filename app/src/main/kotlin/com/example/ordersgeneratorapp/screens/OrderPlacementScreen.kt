@@ -54,34 +54,28 @@ fun OrderPlacementScreen(
         scope.launch {
             isPlacingOrder = true
             orderError = null
-            
             try {
-                if (!repository.isConfigured()) {
-                    orderError = "Alpaca API not configured. Please set your credentials in settings."
-                    return@launch
-                }
-                
+                // Ensure credentials (auto)
+                repository.isConfigured()
                 val result = repository.createOrder(
                     symbol = orderRequest.symbol,
                     quantity = orderRequest.quantity.toInt(),
                     side = orderRequest.side.lowercase(),
                     orderType = orderRequest.orderType.lowercase(),
                     timeInForce = orderRequest.timeInForce.lowercase(),
-                    limitPrice = if (orderRequest.limitPrice.isNotEmpty()) orderRequest.limitPrice else null,
-                    stopPrice = if (orderRequest.stopPrice.isNotEmpty()) orderRequest.stopPrice else null
+                    limitPrice = orderRequest.limitPrice.ifBlank { null },
+                    stopPrice = orderRequest.stopPrice.ifBlank { null }
                 )
-                
                 if (result.isSuccess) {
                     val order = result.getOrNull()!!
-                    orderResult = "Order placed successfully! Order ID: ${order.id}"
-                    // Reset form after successful order
+                    orderResult = "Order placed: ${order.id}"
+                    // Optimistic UI reset
                     orderRequest = OrderRequest()
                 } else {
-                    orderError = result.exceptionOrNull()?.message ?: "Failed to place order"
+                    orderError = result.exceptionOrNull()?.message ?: "Failed"
                 }
-                
             } catch (e: Exception) {
-                orderError = "Error placing order: ${e.message}"
+                orderError = e.message
             } finally {
                 isPlacingOrder = false
                 showConfirmation = false

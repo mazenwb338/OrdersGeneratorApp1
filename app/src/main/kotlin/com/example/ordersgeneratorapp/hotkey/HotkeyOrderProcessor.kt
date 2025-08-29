@@ -119,7 +119,7 @@ class HotkeyOrderProcessor(
                     success = false,
                     alpacaOrderId = null,
                     clientOrderId = clientOrderId,
-                    errorMessage = error,
+                    errorMessage = handleOrderError(error),
                     executionTimeMs = System.currentTimeMillis()
                 )
             }
@@ -136,6 +136,22 @@ class HotkeyOrderProcessor(
                 errorMessage = e.message ?: "Unknown exception",
                 executionTimeMs = System.currentTimeMillis()
             )
+        }
+    }
+
+    /**
+     * Handle order error and return user-friendly message
+     */
+    private fun handleOrderError(error: String): String {
+        return when {
+            error.contains("wash trade detected") -> 
+                "⚠️ Wash trade detected - you have opposite orders. Cancel existing orders first."
+            error.contains("403") -> 
+                "🚫 Order rejected by broker - check account permissions"
+            error.contains("insufficient buying power") ->
+                "💰 Insufficient buying power"
+            else -> 
+                "❌ Order failed: ${error.take(100)}"
         }
     }
 }

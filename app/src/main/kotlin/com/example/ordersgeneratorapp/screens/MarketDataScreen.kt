@@ -1,9 +1,10 @@
 package com.example.ordersgeneratorapp.screens
 
+import android.util.Log
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -12,25 +13,25 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
-import android.util.Log
-import com.example.ordersgeneratorapp.api.MarketData
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.ordersgeneratorapp.repository.AlpacaRepository
+import com.example.ordersgeneratorapp.hotkey.*
 import com.example.ordersgeneratorapp.util.SettingsManager
-import com.example.ordersgeneratorapp.hotkey.HotkeyOrderProcessor
-import com.example.ordersgeneratorapp.hotkey.HotkeyManager
-import com.example.ordersgeneratorapp.data.BrokerAccount
+import com.example.ordersgeneratorapp.ui.theme.*
+import com.example.ordersgeneratorapp.data.ConnectionSettings
+import com.example.ordersgeneratorapp.data.AppSettings
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.GlobalScope
 import java.text.SimpleDateFormat
 import java.util.*
 import java.text.NumberFormat
-import kotlin.math.abs
+import java.util.Calendar
 
-// Enhanced stock data class with complete market information
+// Enhanced stock data class
 data class StockInfo(
     val symbol: String,
     val price: Double = 0.0,
@@ -49,22 +50,29 @@ data class StockInfo(
     val isMarketOpen: Boolean = false
 )
 
+// Market hours function
+fun isMarketHoursOpen(): Boolean {
+    val calendar = Calendar.getInstance()
+    val hour = calendar.get(Calendar.HOUR_OF_DAY)
+    val dayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
+    
+    return dayOfWeek in Calendar.MONDAY..Calendar.FRIDAY && hour in 9..15
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MarketDataScreen(
     onBackClick: () -> Unit,
-    alpacaRepository: AlpacaRepository
+    alpacaRepository: AlpacaRepository,
+    onNavigateToSymbolDetail: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val settingsManager = remember { SettingsManager(context) }
     val scope = rememberCoroutineScope()
     
-    // Enhanced stock list with more diverse stocks
     val watchlistStocks = listOf(
         "TSLA", "AAPL", "GOOGL", "MSFT", "AMZN",
-        "NVDA", "META", "NFLX", "AMD", "UBER", 
-        "BABA", "DIS", "PYPL", "CRM", "ADBE",
-        "INTC", "BA", "JPM", "GS", "V"
+        "NVDA", "META", "NFLX", "AMD", "UBER"
     )
     
     var stockDataMap by remember { mutableStateOf(mapOf<String, StockInfo>()) }
@@ -72,73 +80,86 @@ fun MarketDataScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var lastUpdateTime by remember { mutableStateOf("") }
     
-    // Load settings
-    val connectionSettings = remember { settingsManager.getConnectionSettings() }
-    val appSettings = remember { settingsManager.getAppSettings() }
+    // ⭐ Fix settings loading - collect from Flow
+    var connectionSettings by remember { mutableStateOf(ConnectionSettings()) }
+    var appSettings by remember { mutableStateOf(AppSettings()) }
+    
+    // Collect settings from Flows
+    LaunchedEffect(Unit) {
+        launch {
+            settingsManager.connectionSettings.collect {
+                connectionSettings = it
+            }
+        }
+    }
+    
+    LaunchedEffect(Unit) {
+        launch {
+            settingsManager.appSettings.collect {
+                appSettings = it
+            }
+        }
+    }
+    
+    // ⭐ Now hotkeySettings is properly accessible
     val hotkeySettings = appSettings.hotkeySettings
     
-    // Initialize hotkey components
+    // Initialize hotkey components  
     val hotkeyProcessor = remember { HotkeyOrderProcessor(alpacaRepository) }
     val hotkeyManager = remember { HotkeyManager(hotkeyProcessor) }
     
     fun loadMarketDataForSymbol(symbol: String) {
         scope.launch {
             try {
-                Log.d("MarketDataScreen", "Loading data for $symbol")
+                Log.d("MarketDataScreen", "Loading REAL data for $symbol")
                 val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                 
-                // Get current quote data
-                val quoteResult = alpacaRepository.getMarketData(symbol)
+                // ⭐ ONLY use real Alpaca data - no fallbacks
+                val quoteResult = alpacaRepository.getLatestQuote(symbol)
                 
                 if (quoteResult.isSuccess) {
                     val marketData = quoteResult.getOrNull()
                     if (marketData != null) {
+                        // ⭐ Extract REAL data from Alpaca response
                         val currentPrice = marketData.trade?.price?.toDoubleOrNull() ?: 0.0
                         val bidPrice = marketData.quote?.bidPrice?.toDoubleOrNull() ?: 0.0
                         val askPrice = marketData.quote?.askPrice?.toDoubleOrNull() ?: 0.0
                         val bidSize = marketData.quote?.bidSize?.toLongOrNull() ?: 0L
                         val askSize = marketData.quote?.askSize?.toLongOrNull() ?: 0L
-                        val volume = marketData.trade?.size?.toLongOrNull() ?: 0L
                         
-                        // Get historical data for day change calculation
-                        val barsResult = alpacaRepository.getMarketData("$symbol/bars")
-                        val prevClose = if (barsResult.isSuccess) {
-                            barsResult.getOrNull()?.let { data ->
-                                // Extract previous close from bars data
-                                currentPrice * 0.98 // Fallback calculation
-                            } ?: currentPrice
-                        } else currentPrice
-                        
-                        val dayChange = currentPrice - prevClose
-                        val dayChangePercent = if (prevClose > 0) (dayChange / prevClose) * 100 else 0.0
-                        
-                        val stockInfo = StockInfo(
-                            symbol = symbol,
-                            price = currentPrice,
-                            bid = bidPrice,
-                            ask = askPrice,
-                            bidSize = bidSize,
-                            askSize = askSize,
-                            volume = volume,
-                            dayChange = dayChange,
-                            dayChangePercent = dayChangePercent,
-                            dayHigh = currentPrice * 1.02, // Estimated
-                            dayLow = currentPrice * 0.98,   // Estimated
-                            prevClose = prevClose,
-                            lastUpdated = timestamp,
-                            isMarketOpen = isMarketHoursOpen()
-                        )
-                        
-                        stockDataMap = stockDataMap + (symbol to stockInfo)
-                        Log.d("MarketDataScreen", "Updated $symbol: price=$currentPrice bid=$bidPrice ask=$askPrice")
+                        // Only create StockInfo if we have valid price data
+                        if (currentPrice > 0.0) {
+                            val stockInfo = StockInfo(
+                                symbol = symbol,
+                                price = currentPrice,
+                                bid = bidPrice,
+                                ask = askPrice,
+                                bidSize = bidSize,
+                                askSize = askSize,
+                                volume = 0L, // We'll get this from separate API call if needed
+                                dayChange = 0.0, // Calculate from previous close when available
+                                dayChangePercent = 0.0,
+                                dayHigh = 0.0,
+                                dayLow = 0.0,
+                                prevClose = 0.0,
+                                lastUpdated = timestamp,
+                                isMarketOpen = isMarketHoursOpen()
+                            )
+                            
+                            stockDataMap = stockDataMap + (symbol to stockInfo)
+                            Log.d("MarketDataScreen", "✅ REAL DATA: $symbol price=$currentPrice bid=$bidPrice ask=$askPrice")
+                        } else {
+                            Log.w("MarketDataScreen", "⚠️ INVALID DATA: $symbol price=$currentPrice - not adding to list")
+                        }
+                    } else {
+                        Log.e("MarketDataScreen", "❌ NO DATA: $symbol - marketData is null")
                     }
                 } else {
-                    Log.e("MarketDataScreen", "Failed to load data for $symbol: ${quoteResult.exceptionOrNull()?.message}")
+                    Log.e("MarketDataScreen", "❌ API FAILED: $symbol - ${quoteResult.exceptionOrNull()?.message}")
                 }
                 
             } catch (e: Exception) {
-                Log.e("MarketDataScreen", "Error loading $symbol data", e)
-                errorMessage = "Error loading $symbol: ${e.message}"
+                Log.e("MarketDataScreen", "❌ EXCEPTION: $symbol - ${e.message}", e)
             }
         }
     }
@@ -149,17 +170,17 @@ fun MarketDataScreen(
         
         scope.launch {
             try {
-                Log.d("MarketDataScreen", "Loading market data for ${watchlistStocks.size} symbols")
+                Log.d("MarketDataScreen", "🔄 Loading REAL market data for ${watchlistStocks.size} symbols")
                 
                 watchlistStocks.forEach { symbol ->
                     loadMarketDataForSymbol(symbol)
-                    delay(100) // Small delay to avoid rate limiting
+                    delay(200) // Longer delay to respect rate limits
                 }
                 
                 lastUpdateTime = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                 
             } catch (e: Exception) {
-                Log.e("MarketDataScreen", "Error loading market data", e)
+                Log.e("MarketDataScreen", "❌ Error loading market data", e)
                 errorMessage = "Failed to load market data: ${e.message}"
             } finally {
                 isLoading = false
@@ -167,12 +188,11 @@ fun MarketDataScreen(
         }
     }
     
-    // Auto-refresh every 30 seconds
+    // Auto-refresh every 60 seconds (longer to avoid rate limits)
     LaunchedEffect(Unit) {
         loadAllMarketData()
-        
         while (true) {
-            delay(30000) // 30 seconds
+            delay(60000) // 60 seconds instead of 30
             if (!isLoading) {
                 loadAllMarketData()
             }
@@ -182,41 +202,33 @@ fun MarketDataScreen(
     fun executeQuickTrade(symbol: String, side: String) {
         scope.launch {
             try {
-                Log.d("MarketDataScreen", "Quick trade: $symbol $side")
+                Log.d("MarketDataScreen", "Executing quick trade: $side $symbol")
                 
-                // Find a suitable hotkey preset for this symbol
-                val preset = hotkeySettings.presets.find { it.symbol == symbol }
-                    ?: hotkeySettings.presets.firstOrNull()
-                
-                if (preset != null) {
-                    // ✅ FIX: Add the missing onResult parameter
+                val presets = hotkeySettings.presets
+                if (presets.isNotEmpty()) {
+                    val preset = presets.first()
+                    
+                    // ⭐ Fixed method call - connectionSettings is now a value, not Flow
                     hotkeyManager.executeHotkey(
-                        preset = preset.copy(symbol = symbol), // Override symbol
+                        preset = preset,
                         side = side,
-                        connectionSettings = connectionSettings,
+                        connectionSettings = connectionSettings, // ⭐ Now properly typed
                         onResult = { result ->
-                            // ✅ FIX: Now using the correct properties that exist in HotkeyExecutionResult
                             scope.launch {
                                 if (result.isFullSuccess) {
-                                    val successMsg = "✅ Quick trade successful: ${result.summary}"
-                                    Log.d("MarketDataScreen", successMsg)
+                                    Log.d("MarketDataScreen", "Quick trade successful: ${result.summary}")
                                     errorMessage = null
-                                } else if (result.hasPartialSuccess) {
-                                    val partialMsg = "⚠️ ${result.summary}"
-                                    Log.w("MarketDataScreen", partialMsg)
-                                    errorMessage = partialMsg
                                 } else {
-                                    val failMsg = "❌ ${result.summary}"
-                                    Log.e("MarketDataScreen", failMsg)
-                                    errorMessage = failMsg
+                                    Log.e("MarketDataScreen", "Quick trade failed: ${result.summary}")
+                                    errorMessage = result.summary
                                 }
                             }
                         }
                     )
                     
                 } else {
-                    Log.w("MarketDataScreen", "No hotkey preset available for quick trade")
-                    errorMessage = "No hotkey presets configured. Go to Settings > Hotkey Settings to add presets."
+                    Log.w("MarketDataScreen", "No hotkey preset available")
+                    errorMessage = "No hotkey presets configured."
                 }
                 
             } catch (e: Exception) {
@@ -314,22 +326,67 @@ fun MarketDataScreen(
                 }
             }
             
-            // Stock List
+            // ⭐ Show message when no data is available
+            if (!isLoading && stockDataMap.isEmpty()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "No market data available",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Check your Alpaca connection and try refreshing",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            
+            // Stock List - only show stocks with real data
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(watchlistStocks) { symbol ->
+                items(watchlistStocks.filter { stockDataMap.containsKey(it) }) { symbol ->
                     val stockInfo = stockDataMap[symbol]
                     
-                    EnhancedStockCard(
-                        symbol = symbol,
-                        stockInfo = stockInfo,
-                        isLoading = stockInfo == null && isLoading,
-                        onBuy = { executeQuickTrade(symbol, "buy") },
-                        onSell = { executeQuickTrade(symbol, "sell") }
-                    )
+                    if (stockInfo != null) {
+                        EnhancedStockCard(
+                            symbol = symbol,
+                            stockInfo = stockInfo,
+                            isLoading = false,
+                            onBuy = { executeQuickTrade(symbol, "buy") },
+                            onSell = { executeQuickTrade(symbol, "sell") },
+                            onNavigateToDetail = { 
+                                onNavigateToSymbolDetail(symbol)
+                            }
+                        )
+                    }
+                }
+                
+                // Show loading placeholders for symbols being loaded
+                if (isLoading) {
+                    items(watchlistStocks.filter { !stockDataMap.containsKey(it) }) { symbol ->
+                        EnhancedStockCard(
+                            symbol = symbol,
+                            stockInfo = null,
+                            isLoading = true,
+                            onBuy = { },
+                            onSell = { },
+                            onNavigateToDetail = { }
+                        )
+                    }
                 }
             }
         }
@@ -342,11 +399,26 @@ private fun EnhancedStockCard(
     stockInfo: StockInfo?,
     isLoading: Boolean,
     onBuy: () -> Unit,
-    onSell: () -> Unit
+    onSell: () -> Unit,
+    onNavigateToDetail: (String) -> Unit = {}
 ) {
+    var buyButtonPressed by remember { mutableStateOf(false) }
+    var sellButtonPressed by remember { mutableStateOf(false) }
+    var showOrderConfirmation by remember { mutableStateOf(false) }
+    var lastOrderSide by remember { mutableStateOf("") }
+    
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { 
+                if (stockInfo != null) {
+                    onNavigateToDetail(symbol) 
+                }
+            },
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        )
     ) {
         Column(
             modifier = Modifier.padding(16.dp)
@@ -359,8 +431,11 @@ private fun EnhancedStockCard(
             ) {
                 Text(
                     text = symbol,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = if (stockInfo != null) {
+                        Modifier.clickable { onNavigateToDetail(symbol) }
+                    } else Modifier
                 )
                 
                 if (stockInfo != null) {
@@ -371,12 +446,21 @@ private fun EnhancedStockCard(
                             fontWeight = FontWeight.Bold
                         )
                         
-                        val changeColor = if (stockInfo.dayChange >= 0) Color.Green else Color.Red
-                        Text(
-                            text = "${if (stockInfo.dayChange >= 0) "+" else ""}${String.format("%.2f", stockInfo.dayChange)} (${String.format("%.2f", stockInfo.dayChangePercent)}%)",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = changeColor
-                        )
+                        // Only show change if we have the data
+                        if (stockInfo.dayChange != 0.0) {
+                            val changeColor = if (stockInfo.dayChange >= 0) BullGreen else BearRed
+                            Text(
+                                text = "${if (stockInfo.dayChange >= 0) "+" else ""}${String.format("%.2f", stockInfo.dayChange)} (${String.format("%.2f", stockInfo.dayChangePercent)}%)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = changeColor
+                            )
+                        } else {
+                            Text(
+                                text = "Real-time price",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 } else if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
@@ -392,28 +476,23 @@ private fun EnhancedStockCard(
             if (stockInfo != null) {
                 Spacer(modifier = Modifier.height(12.dp))
                 
-                // Market Data Grid
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    MarketDataItem("Bid", "$${String.format("%.2f", stockInfo.bid)}", "${stockInfo.bidSize}")
-                    MarketDataItem("Ask", "$${String.format("%.2f", stockInfo.ask)}", "${stockInfo.askSize}")
-                    MarketDataItem("Vol", "${NumberFormat.getNumberInstance().format(stockInfo.volume)}", "")
+                // Market Data Grid - only show if we have bid/ask data
+                if (stockInfo.bid > 0.0 || stockInfo.ask > 0.0) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        if (stockInfo.bid > 0.0) {
+                            MarketDataItem("Bid", "$${String.format("%.2f", stockInfo.bid)}", "${stockInfo.bidSize}")
+                        }
+                        if (stockInfo.ask > 0.0) {
+                            MarketDataItem("Ask", "$${String.format("%.2f", stockInfo.ask)}", "${stockInfo.askSize}")
+                        }
+                        MarketDataItem("Price", "$${String.format("%.2f", stockInfo.price)}", "Live")
+                    }
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
                 }
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    MarketDataItem("High", "$${String.format("%.2f", stockInfo.dayHigh)}", "")
-                    MarketDataItem("Low", "$${String.format("%.2f", stockInfo.dayLow)}", "")
-                    MarketDataItem("Prev", "$${String.format("%.2f", stockInfo.prevClose)}", "")
-                }
-                
-                Spacer(modifier = Modifier.height(12.dp))
                 
                 // Trading Buttons
                 Row(
@@ -421,32 +500,93 @@ private fun EnhancedStockCard(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Button(
-                        onClick = onBuy,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.Green.copy(alpha = 0.8f))
+                        onClick = {
+                            buyButtonPressed = true
+                            lastOrderSide = "BUY"
+                            onBuy()
+                            showOrderConfirmation = true
+                            GlobalScope.launch {
+                                delay(200)
+                                buyButtonPressed = false
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (buyButtonPressed) BullGreen.copy(alpha = 0.9f) else BullGreen
+                        )
                     ) {
-                        Icon(Icons.Default.ArrowUpward, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("BUY")
+                        if (buyButtonPressed) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("✓", color = Color.White, fontSize = 12.sp)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("BUYING...", color = Color.White, fontSize = 10.sp)
+                            }
+                        } else {
+                            Text("BUY", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                     
                     Button(
-                        onClick = onSell,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.Red.copy(alpha = 0.8f))
+                        onClick = {
+                            sellButtonPressed = true
+                            lastOrderSide = "SELL"
+                            onSell()
+                            showOrderConfirmation = true
+                            GlobalScope.launch {
+                                delay(200)
+                                sellButtonPressed = false
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (sellButtonPressed) BearRed.copy(alpha = 0.9f) else BearRed
+                        )
                     ) {
-                        Icon(Icons.Default.ArrowDownward, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("SELL")
+                        if (sellButtonPressed) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("✓", color = Color.White, fontSize = 12.sp)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("SELLING...", color = Color.White, fontSize = 10.sp)
+                            }
+                        } else {
+                            Text("SELL", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
-                
-                // Last Update Time
+            }
+        }
+    }
+    
+    // Order Confirmation
+    if (showOrderConfirmation) {
+        LaunchedEffect(showOrderConfirmation) {
+            delay(2000)
+            showOrderConfirmation = false
+        }
+        
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (lastOrderSide == "BUY") BullGreen else BearRed
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("📊", fontSize = 16.sp)
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Updated: ${stockInfo.lastUpdated}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp)
+                    text = "$lastOrderSide order placed for $symbol",
+                    color = Color.White,
+                    fontWeight = FontWeight.Medium
                 )
             }
         }
@@ -454,40 +594,26 @@ private fun EnhancedStockCard(
 }
 
 @Composable
-private fun MarketDataItem(
-    label: String,
-    value: String,
-    subtitle: String
-) {
+private fun MarketDataItem(label: String, value: String, subtitle: String) {
     Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.padding(horizontal = 8.dp)
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodySmall,
+            fontSize = 10.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
             text = value,
-            style = MaterialTheme.typography.bodyMedium,
+            fontSize = 11.sp,
             fontWeight = FontWeight.Medium
         )
         if (subtitle.isNotEmpty()) {
             Text(
                 text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
+                fontSize = 9.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
-}
-
-private fun isMarketHoursOpen(): Boolean {
-    val now = Calendar.getInstance()
-    val hour = now.get(Calendar.HOUR_OF_DAY)
-    val dayOfWeek = now.get(Calendar.DAY_OF_WEEK)
-    
-    // Simple market hours check (9:30 AM - 4:00 PM EST, Monday-Friday)
-    return dayOfWeek in Calendar.MONDAY..Calendar.FRIDAY && hour in 9..16
 }

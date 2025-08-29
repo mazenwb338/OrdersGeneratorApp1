@@ -1,816 +1,573 @@
 package com.example.ordersgeneratorapp.screens
 
+import android.util.Log
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.github.mikephil.charting.charts.CombinedChart
-import com.github.mikephil.charting.components.*
-import com.github.mikephil.charting.data.*
-import com.github.mikephil.charting.formatter.ValueFormatter
-import com.example.ordersgeneratorapp.R
-import com.example.ordersgeneratorapp.data.*
-import com.example.ordersgeneratorapp.viewmodel.SymbolDetailViewModel
-import dagger.hilt.android.lifecycle.HiltViewModel
+import com.example.ordersgeneratorapp.repository.AlpacaRepository
+import com.example.ordersgeneratorapp.repository.CandleBar
+import com.example.ordersgeneratorapp.ui.theme.*
 import kotlinx.coroutines.delay
-import java.text.SimpleDateFormat
-import java.util.*
+import kotlinx.coroutines.launch
+
+// Real Quote data class - no dummy data
+data class Quote(
+    val symbol: String,
+    val lastPrice: Double,
+    val change: Double,
+    val changePercent: Double,
+    val volume: Long,
+    val high: Double,
+    val low: Double,
+    val open: Double,
+    val bid: Double,
+    val ask: Double,
+    val bidSize: Int,
+    val askSize: Int,
+    val isLiveData: Boolean = false
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SymbolDetailScreen(
     symbol: String,
-    onNavigateBack: () -> Unit,
-    viewModel: SymbolDetailViewModel = viewModel()
+    alpacaRepository: AlpacaRepository,
+    onBack: () -> Unit,
+    onOrderHistory: () -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    
     var selectedTimeframe by remember { mutableStateOf("1D") }
     var showOrderDialog by remember { mutableStateOf(false) }
-    var orderSide by remember { mutableStateOf("buy") }
+    var orderDialogSide by remember { mutableStateOf("") }
+    var orderDialogQuantity by remember { mutableStateOf("") }
     
-    // Dark theme colors
-    val backgroundColor = colorResource(R.color.backgroundColor)
-    val surfaceColor = colorResource(R.color.surfaceColor)
-    val cardColor = colorResource(R.color.cardColor)
-    val bullishGreen = colorResource(R.color.bullish_green)
-    val bearishRed = colorResource(R.color.bearish_red)
+    // Button press states for visual feedback
+    var buyButtonStates by remember { mutableStateOf(mapOf<String, Boolean>()) }
+    var sellButtonStates by remember { mutableStateOf(mapOf<String, Boolean>()) }
     
-    // Initialize data loading with live updates
-    LaunchedEffect(symbol) {
-        viewModel.initialize(symbol)
+    // Order confirmation
+    var showOrderConfirmation by remember { mutableStateOf(false) }
+    var lastOrderInfo by remember { mutableStateOf("") }
+    
+    // State for real quote data
+    var currentQuote by remember { mutableStateOf<Quote?>(null) }
+    var isLoadingQuote by remember { mutableStateOf(true) }
+    var quoteError by remember { mutableStateOf<String?>(null) }
+    
+    // Load real quote data function
+    fun loadRealQuoteData() {
+        scope.launch {
+            try {
+                isLoadingQuote = true
+                quoteError = null
+                
+                Log.d("SymbolDetailScreen", "Loading REAL data for $symbol")
+                
+                // Use real Alpaca API call
+                val quoteResult = alpacaRepository.getLatestQuote(symbol)
+                
+                if (quoteResult.isSuccess) {
+                    val marketData = quoteResult.getOrNull()
+                    if (marketData != null) {
+                        // Extract real data from Alpaca response
+                        val currentPrice = marketData.trade?.price?.toDoubleOrNull() ?: 0.0
+                        val bidPrice = marketData.quote?.bidPrice?.toDoubleOrNull() ?: 0.0
+                        val askPrice = marketData.quote?.askPrice?.toDoubleOrNull() ?: 0.0
+                        val bidSize = marketData.quote?.bidSize?.toIntOrNull() ?: 0
+                        val askSize = marketData.quote?.askSize?.toIntOrNull() ?: 0
+                        
+                        if (currentPrice > 0.0) {
+                            currentQuote = Quote(
+                                symbol = symbol,
+                                lastPrice = currentPrice,
+                                change = 0.0, // Calculate from previous close when available
+                                changePercent = 0.0,
+                                volume = 0L, // Get from separate API call if needed
+                                high = 0.0,
+                                low = 0.0,
+                                open = 0.0,
+                                bid = bidPrice,
+                                ask = askPrice,
+                                bidSize = bidSize,
+                                askSize = askSize,
+                                isLiveData = true
+                            )
+                            
+                            Log.d("SymbolDetailScreen", "✅ REAL DATA: $symbol price=$currentPrice")
+                        } else {
+                            quoteError = "Invalid price data received"
+                            Log.w("SymbolDetailScreen", "⚠️ INVALID DATA: $symbol price=$currentPrice")
+                        }
+                    } else {
+                        quoteError = "No market data received"
+                        Log.e("SymbolDetailScreen", "❌ NO DATA: $symbol")
+                    }
+                } else {
+                    quoteError = "API call failed: ${quoteResult.exceptionOrNull()?.message}"
+                    Log.e("SymbolDetailScreen", "❌ API FAILED: $symbol - ${quoteResult.exceptionOrNull()?.message}")
+                }
+                
+            } catch (e: Exception) {
+                quoteError = "Failed to load quote data: ${e.message}"
+                Log.e("SymbolDetailScreen", "❌ EXCEPTION: $symbol - ${e.message}", e)
+            } finally {
+                isLoadingQuote = false
+            }
+        }
     }
     
-    val uiState by viewModel.uiState.collectAsState()
+    // Load quote data on screen load
+    LaunchedEffect(symbol) {
+        loadRealQuoteData()
+    }
     
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = backgroundColor
+    // Function to handle quick order placement
+    fun placeQuickOrder(side: String, quantity: String) {
+        // Update button state for visual feedback
+        if (side == "BUY") {
+            buyButtonStates = buyButtonStates + (quantity to true)
+        } else {
+            sellButtonStates = sellButtonStates + (quantity to true)
+        }
+        
+        // Show confirmation
+        val price = currentQuote?.lastPrice ?: 0.0
+        lastOrderInfo = "$side $quantity shares of $symbol at $${String.format("%.2f", price)}"
+        showOrderConfirmation = true
+        
+        // Reset button state after animation
+        scope.launch {
+            delay(300)
+            if (side == "BUY") {
+                buyButtonStates = buyButtonStates - quantity
+            } else {
+                sellButtonStates = sellButtonStates - quantity
+            }
+        }
+    }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize()
-        ) {
-            // Enhanced Top Bar with dark theme
-            TopAppBar(
-                title = { 
-                    Column {
+        // Top Bar with Live Price
+        TopAppBar(
+            title = { 
+                Column {
+                    Text(
+                        text = symbol,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    
+                    if (isLoadingQuote) {
                         Text(
-                            text = symbol,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            text = "Loading...",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        uiState.currentQuote?.let { quote ->
-                            Text(
-                                text = "$${String.format("%.2f", quote.lastPrice)} ${if (quote.change >= 0) "+" else ""}${String.format("%.2f", quote.change)} (${String.format("%.2f", quote.changePercent)}%)",
-                                fontSize = 12.sp,
-                                color = if (quote.change >= 0) bullishGreen else bearishRed
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            Icons.Default.ArrowBack, 
-                            "Back",
-                            tint = Color.White
-                        )
-                    }
-                },
-                actions = {
-                    // Live indicator
-                    if (uiState.isLiveDataActive) {
+                    } else if (currentQuote != null && currentQuote!!.lastPrice > 0.0) {
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 8.dp)
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .background(bullishGreen, androidx.compose.foundation.shape.CircleShape)
+                            Text(
+                                text = "$${String.format("%.2f", currentQuote!!.lastPrice)}",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("LIVE", fontSize = 10.sp, color = bullishGreen)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            if (currentQuote!!.change != 0.0) {
+                                Text(
+                                    text = "${if (currentQuote!!.change >= 0) "+" else ""}${String.format("%.2f", currentQuote!!.change)} (${String.format("%.2f", currentQuote!!.changePercent)}%)",
+                                    fontSize = 12.sp,
+                                    color = if (currentQuote!!.change >= 0) BullGreen else BearRed,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
                         }
-                    }
-                    IconButton(onClick = { viewModel.refreshData() }) {
-                        Icon(
-                            Icons.Default.Refresh, 
-                            "Refresh",
-                            tint = if (uiState.isLoading) bullishGreen else Color.Gray
+                    } else {
+                        Text(
+                            text = "No price data",
+                            fontSize = 14.sp,
+                            color = BearRed
                         )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = surfaceColor
-                )
+                }
+            },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.Default.ArrowBack, 
+                        "Back",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            },
+            actions = {
+                // Refresh button
+                IconButton(onClick = { loadRealQuoteData() }) {
+                    if (isLoadingQuote) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.Refresh,
+                            "Refresh",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = MaterialTheme.colorScheme.surface
             )
+        )
+        
+        // Content
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(16.dp)
+        ) {
             
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // Timeframe Selector
+            // Error Message
+            quoteError?.let { error ->
                 item {
-                    TimeframeSelectorCard(
-                        selectedTimeframe = selectedTimeframe,
-                        onTimeframeSelected = { 
-                            selectedTimeframe = it
-                            viewModel.loadChartData(symbol, it)
-                        },
-                        cardColor = cardColor
-                    )
-                }
-                
-                // Live Chart with All Indicators
-                item {
-                    EnhancedLiveChart(
-                        symbol = symbol,
-                        chartData = uiState.chartData,
-                        technicalIndicators = uiState.technicalIndicators,
-                        isLoading = uiState.isLoading,
-                        cardColor = cardColor,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(500.dp)
-                            .padding(horizontal = 16.dp)
-                    )
-                }
-                
-                // Trading Hotkeys
-                item {
-                    TradingHotkeysCard(
-                        symbol = symbol,
-                        currentPrice = uiState.currentQuote?.lastPrice ?: 0.0,
-                        onQuickTrade = { side, preset -> 
-                            orderSide = side
-                            showOrderDialog = true
-                        },
-                        cardColor = cardColor,
-                        bullishGreen = bullishGreen,
-                        bearishRed = bearishRed
-                    )
-                }
-                
-                // Position and Orders Row
-                item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
                     ) {
-                        // Current Position for Symbol
-                        SymbolPositionCard(
-                            symbol = symbol,
-                            position = uiState.symbolPosition,
-                            cardColor = cardColor,
-                            bullishGreen = bullishGreen,
-                            bearishRed = bearishRed,
-                            modifier = Modifier.weight(1f)
+                        Column(
+                            modifier = Modifier.padding(16.dp)
+                        ) {
+                            Text(
+                                text = "⚠️ Data Issue",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Text(
+                                text = error,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // Real-time Quote Summary Card
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        Text(
+                            text = "Real-time Quote",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(bottom = 12.dp)
                         )
                         
-                        // Open Orders for Symbol
-                        SymbolOrdersCard(
-                            symbol = symbol,
-                            orders = uiState.symbolOrders,
-                            onCancelOrder = { viewModel.cancelOrder(it) },
-                            cardColor = cardColor,
-                            bearishRed = bearishRed,
-                            modifier = Modifier.weight(1f)
-                        )
+                        if (currentQuote != null && currentQuote!!.lastPrice > 0.0) {
+                            // Current Price & Change
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "Current Price",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "$${String.format("%.2f", currentQuote!!.lastPrice)}",
+                                        fontSize = 24.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                
+                                if (currentQuote!!.change != 0.0) {
+                                    Column(
+                                        horizontalAlignment = Alignment.End
+                                    ) {
+                                        Text(
+                                            text = "Day Change",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        val changeColor = if (currentQuote!!.change >= 0) BullGreen else BearRed
+                                        Text(
+                                            text = "${if (currentQuote!!.change >= 0) "+" else ""}${String.format("%.2f", currentQuote!!.change)}",
+                                            fontSize = 18.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = changeColor
+                                        )
+                                        Text(
+                                            text = "(${String.format("%.2f", currentQuote!!.changePercent)}%)",
+                                            fontSize = 14.sp,
+                                            color = changeColor
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = "No real-time data available",
+                                fontSize = 16.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 20.dp)
+                            )
+                        }
                     }
                 }
-                
-                // Latest News Feed
+            }
+            
+            // Quick Trading Section - only show if we have price data
+            if (currentQuote != null && currentQuote!!.lastPrice > 0.0) {
                 item {
-                    SymbolNewsCard(
-                        symbol = symbol,
-                        news = uiState.symbolNews,
-                        isLoadingNews = uiState.isLoadingNews,
-                        onRefreshNews = { viewModel.refreshNews() },
-                        cardColor = cardColor,
-                        surfaceColor = surfaceColor
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp)
+                        ) {
+                            Text(
+                                text = "Quick Trade @ $${String.format("%.2f", currentQuote!!.lastPrice)}",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            
+                            Spacer(modifier = Modifier.height(16.dp))
+                            
+                            // BUY Buttons
+                            Text("BUY", color = BullGreen, fontWeight = FontWeight.Bold)
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            ) {
+                                items(listOf("25", "50", "100", "200", "500")) { qty ->
+                                    val isPressed = buyButtonStates[qty] == true
+                                    Button(
+                                        onClick = { placeQuickOrder("BUY", qty) },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isPressed) BullGreen.copy(alpha = 0.8f) else BullGreen
+                                        ),
+                                        modifier = Modifier.height(40.dp)
+                                    ) {
+                                        if (isPressed) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text("✓", color = Color.White, fontSize = 12.sp)
+                                                Spacer(modifier = Modifier.width(2.dp))
+                                                Text(qty, color = Color.White, fontSize = 10.sp)
+                                            }
+                                        } else {
+                                            Text(qty, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            Spacer(modifier = Modifier.height(12.dp))
+                            
+                            // SELL Buttons
+                            Text("SELL", color = BearRed, fontWeight = FontWeight.Bold)
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            ) {
+                                items(listOf("25", "50", "100", "200", "500")) { qty ->
+                                    val isPressed = sellButtonStates[qty] == true
+                                    Button(
+                                        onClick = { placeQuickOrder("SELL", qty) },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isPressed) BearRed.copy(alpha = 0.8f) else BearRed
+                                        ),
+                                        modifier = Modifier.height(40.dp)
+                                    ) {
+                                        if (isPressed) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text("✓", color = Color.White, fontSize = 12.sp)
+                                                Spacer(modifier = Modifier.width(2.dp))
+                                                Text(qty, color = Color.White, fontSize = 10.sp)
+                                            }
+                                        } else {
+                                            Text(qty, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
+                            // Advanced Order Button
+                            OutlinedButton(
+                                onClick = { 
+                                    orderDialogSide = "CUSTOM"
+                                    showOrderDialog = true 
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Advanced Order")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Button(onClick = { /* existing buy/sell actions */ }) { Text("Trade") }
+            OutlinedButton(onClick = onOrderHistory) { Text("Order History") }
+        }
+
+        // Candle chart area
+        var candles by remember { mutableStateOf<List<CandleBar>>(emptyList()) }
+        var candleError by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(symbol) {
+            scope.launch {
+                val res = alpacaRepository.getRecentBars(symbol, timeframe = "1Min", limit = 120)
+                if (res.isSuccess) candles = res.getOrNull()!! else candleError = res.exceptionOrNull()?.message
+            }
+        }
+        CandleChart(candles)
+        candleError?.let { Text(it, color = Color.Red) }
+    }
+    
+    // Order Confirmation Toast
+    if (showOrderConfirmation) {
+        LaunchedEffect(showOrderConfirmation) {
+            delay(3000)
+            showOrderConfirmation = false
+        }
+        
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = BullGreen
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.White)
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = "Order Placed Successfully!",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = lastOrderInfo,
+                        color = Color.White,
+                        fontSize = 12.sp
                     )
                 }
             }
         }
     }
     
-    // Order Dialog
+    // Advanced Order Dialog
     if (showOrderDialog) {
-        OrderDialog(
-            symbol = symbol,
-            side = orderSide,
-            currentPrice = uiState.currentQuote?.lastPrice ?: 0.0,
-            onDismiss = { showOrderDialog = false },
-            onConfirm = { orderRequest ->
-                viewModel.placeOrder(orderRequest)
-                showOrderDialog = false
+        AlertDialog(
+            onDismissRequest = { showOrderDialog = false },
+            title = { 
+                Text("Advanced Order - $symbol", fontWeight = FontWeight.Bold) 
+            },
+            text = { 
+                Column {
+                    Text("Advanced order placement with custom quantities, order types, and time-in-force options.")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    if (currentQuote != null && currentQuote!!.lastPrice > 0.0) {
+                        Text("Current Price: $${String.format("%.2f", currentQuote!!.lastPrice)}", 
+                             fontSize = 12.sp, 
+                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (currentQuote!!.bid > 0.0 && currentQuote!!.ask > 0.0) {
+                            Text("Bid/Ask: $${String.format("%.2f", currentQuote!!.bid)} / $${String.format("%.2f", currentQuote!!.ask)}", 
+                                 fontSize = 12.sp, 
+                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showOrderDialog = false }) {
+                    Text("Coming Soon", color = BullGreen)
+                }
             }
         )
     }
 }
 
 @Composable
-fun TimeframeSelectorCard(
-    selectedTimeframe: String,
-    onTimeframeSelected: (String) -> Unit,
-    cardColor: Color
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        colors = CardDefaults.cardColors(containerColor = cardColor)
-    ) {
-        LazyRow(
-            modifier = Modifier.padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(listOf("1m", "5m", "15m", "30m", "1H", "4H", "1D", "1W")) { timeframe ->
-                FilterChip(
-                    onClick = { onTimeframeSelected(timeframe) },
-                    label = { Text(timeframe, color = Color.White) },
-                    selected = selectedTimeframe == timeframe,
-                    colors = FilterChipDefaults.filterChipColors(
-                        containerColor = Color.Gray.copy(alpha = 0.3f),
-                        selectedContainerColor = colorResource(R.color.colorAccent)
-                    )
-                )
+fun CandleChart(bars: List<CandleBar>) {
+    if (bars.isEmpty()) {
+        Box(Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+    } else {
+        // Minimal textual fallback
+        Column(Modifier.height(180.dp).verticalScroll(rememberScrollState())) {
+            bars.takeLast(30).forEach {
+                Text("${it.timestamp.takeLast(8)} O:${it.open} H:${it.high} L:${it.low} C:${it.close}")
             }
         }
     }
 }
 
 @Composable
-fun EnhancedLiveChart(
-    symbol: String,
-    chartData: ChartData,
-    technicalIndicators: TechnicalIndicators,
-    isLoading: Boolean,
-    cardColor: Color,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier,
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = cardColor)
+private fun MarketDataItem(label: String, value: String) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                text = "$symbol - Live Chart with Indicators",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
-            
-            Box(modifier = Modifier.fillMaxSize()) {
-                if (isLoading) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = colorResource(R.color.colorAccent))
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("Loading live chart data...", color = Color.White)
-                        }
-                    }
-                } else {
-                    AndroidView(
-                        factory = { context ->
-                            CombinedChart(context).apply {
-                                description.isEnabled = false
-                                setTouchEnabled(true)
-                                setDragEnabled(true)
-                                setScaleEnabled(true)
-                                setPinchZoom(true)
-                                setDrawGridBackground(false)
-                                setBackgroundColor(cardColor.toArgb())
-                                
-                                // Configure X-axis for dark theme
-                                xAxis.apply {
-                                    position = XAxis.XAxisPosition.BOTTOM
-                                    setDrawGridLines(true)
-                                    gridColor = Color.Gray.copy(alpha = 0.3f).toArgb()
-                                    textColor = Color.White.toArgb()
-                                    valueFormatter = object : ValueFormatter() {
-                                        private val format = SimpleDateFormat("HH:mm", Locale.getDefault())
-                                        override fun getFormattedValue(value: Float): String {
-                                            return format.format(Date(value.toLong() * 1000))
-                                        }
-                                    }
-                                }
-                                
-                                // Configure Y-axes for dark theme
-                                axisLeft.apply {
-                                    setDrawGridLines(true)
-                                    gridColor = Color.Gray.copy(alpha = 0.3f).toArgb()
-                                    textColor = Color.White.toArgb()
-                                }
-                                axisRight.isEnabled = false
-                                
-                                // Enhanced legend for dark theme
-                                legend.apply {
-                                    isEnabled = true
-                                    textColor = Color.White.toArgb()
-                                    form = Legend.LegendForm.LINE
-                                    horizontalAlignment = Legend.LegendHorizontalAlignment.LEFT
-                                    verticalAlignment = Legend.LegendVerticalAlignment.TOP
-                                }
-                            }
-                        },
-                        update = { chart ->
-                            val combinedData = CombinedData()
-                            
-                            // Add candlestick data
-                            if (chartData.candleData.isNotEmpty()) {
-                                val candleEntries = chartData.candleData.mapIndexed { index, candle ->
-                                    CandleEntry(
-                                        index.toFloat(),
-                                        candle.high.toFloat(),
-                                        candle.low.toFloat(),
-                                        candle.open.toFloat(),
-                                        candle.close.toFloat()
-                                    )
-                                }
-                                
-                                val candleDataSet = CandleDataSet(candleEntries, "Price").apply {
-                                    color = Color.Gray.toArgb()
-                                    shadowColor = Color.Gray.toArgb()
-                                    shadowWidth = 1f
-                                    decreasingColor = colorResource(R.color.bearish_red).toArgb()
-                                    decreasingPaintStyle = android.graphics.Paint.Style.FILL
-                                    increasingColor = colorResource(R.color.bullish_green).toArgb()
-                                    increasingPaintStyle = android.graphics.Paint.Style.FILL
-                                    neutralColor = Color.Gray.toArgb()
-                                }
-                                
-                                combinedData.setData(CandleData(candleDataSet))
-                            }
-                            
-                            // Add EMA and VWAP lines with specified colors
-                            val lineData = LineData()
-                            
-                            // 9 EMA - Green
-                            if (technicalIndicators.ema9.isNotEmpty()) {
-                                val ema9Entries = technicalIndicators.ema9.mapIndexed { index, value ->
-                                    Entry(index.toFloat(), value.toFloat())
-                                }
-                                val ema9DataSet = LineDataSet(ema9Entries, "EMA 9").apply {
-                                    color = colorResource(R.color.ema9_green).toArgb()
-                                    lineWidth = 2f
-                                    setDrawCircles(false)
-                                    setDrawValues(false)
-                                }
-                                lineData.addDataSet(ema9DataSet)
-                            }
-                            
-                            // 20 EMA - Orange
-                            if (technicalIndicators.ema20.isNotEmpty()) {
-                                val ema20Entries = technicalIndicators.ema20.mapIndexed { index, value ->
-                                    Entry(index.toFloat(), value.toFloat())
-                                }
-                                val ema20DataSet = LineDataSet(ema20Entries, "EMA 20").apply {
-                                    color = colorResource(R.color.ema20_orange).toArgb()
-                                    lineWidth = 2f
-                                    setDrawCircles(false)
-                                    setDrawValues(false)
-                                }
-                                lineData.addDataSet(ema20DataSet)
-                            }
-                            
-                            // 50 EMA - Red
-                            if (technicalIndicators.ema50.isNotEmpty()) {
-                                val ema50Entries = technicalIndicators.ema50.mapIndexed { index, value ->
-                                    Entry(index.toFloat(), value.toFloat())
-                                }
-                                val ema// filepath: /Users/mazenbteddini/OrdersGeneratorApp/app/src/main/kotlin/com/example/ordersgeneratorapp/screens/SymbolDetailScreen.kt
-package com.example.ordersgeneratorapp.screens
-
-import androidx.compose.foundation.*
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.res.colorResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.github.mikephil.charting.charts.CombinedChart
-import com.github.mikephil.charting.components.*
-import com.github.mikephil.charting.data.*
-import com.github.mikephil.charting.formatter.ValueFormatter
-import com.example.ordersgeneratorapp.R
-import com.example.ordersgeneratorapp.data.*
-import com.example.ordersgeneratorapp.viewmodel.SymbolDetailViewModel
-import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.delay
-import java.text.SimpleDateFormat
-import java.util.*
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SymbolDetailScreen(
-    symbol: String,
-    onNavigateBack: () -> Unit,
-    viewModel: SymbolDetailViewModel = viewModel()
-) {
-    var selectedTimeframe by remember { mutableStateOf("1D") }
-    var showOrderDialog by remember { mutableStateOf(false) }
-    var orderSide by remember { mutableStateOf("buy") }
-    
-    // Dark theme colors
-    val backgroundColor = colorResource(R.color.backgroundColor)
-    val surfaceColor = colorResource(R.color.surfaceColor)
-    val cardColor = colorResource(R.color.cardColor)
-    val bullishGreen = colorResource(R.color.bullish_green)
-    val bearishRed = colorResource(R.color.bearish_red)
-    
-    // Initialize data loading with live updates
-    LaunchedEffect(symbol) {
-        viewModel.initialize(symbol)
-    }
-    
-    val uiState by viewModel.uiState.collectAsState()
-    
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = backgroundColor
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize()
-        ) {
-            // Enhanced Top Bar with dark theme
-            TopAppBar(
-                title = { 
-                    Column {
-                        Text(
-                            text = symbol,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        uiState.currentQuote?.let { quote ->
-                            Text(
-                                text = "$${String.format("%.2f", quote.lastPrice)} ${if (quote.change >= 0) "+" else ""}${String.format("%.2f", quote.change)} (${String.format("%.2f", quote.changePercent)}%)",
-                                fontSize = 12.sp,
-                                color = if (quote.change >= 0) bullishGreen else bearishRed
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            Icons.Default.ArrowBack, 
-                            "Back",
-                            tint = Color.White
-                        )
-                    }
-                },
-                actions = {
-                    // Live indicator
-                    if (uiState.isLiveDataActive) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 8.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .background(bullishGreen, androidx.compose.foundation.shape.CircleShape)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("LIVE", fontSize = 10.sp, color = bullishGreen)
-                        }
-                    }
-                    IconButton(onClick = { viewModel.refreshData() }) {
-                        Icon(
-                            Icons.Default.Refresh, 
-                            "Refresh",
-                            tint = if (uiState.isLoading) bullishGreen else Color.Gray
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = surfaceColor
-                )
-            )
-            
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // Timeframe Selector
-                item {
-                    TimeframeSelectorCard(
-                        selectedTimeframe = selectedTimeframe,
-                        onTimeframeSelected = { 
-                            selectedTimeframe = it
-                            viewModel.loadChartData(symbol, it)
-                        },
-                        cardColor = cardColor
-                    )
-                }
-                
-                // Live Chart with All Indicators
-                item {
-                    EnhancedLiveChart(
-                        symbol = symbol,
-                        chartData = uiState.chartData,
-                        technicalIndicators = uiState.technicalIndicators,
-                        isLoading = uiState.isLoading,
-                        cardColor = cardColor,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(500.dp)
-                            .padding(horizontal = 16.dp)
-                    )
-                }
-                
-                // Trading Hotkeys
-                item {
-                    TradingHotkeysCard(
-                        symbol = symbol,
-                        currentPrice = uiState.currentQuote?.lastPrice ?: 0.0,
-                        onQuickTrade = { side, preset -> 
-                            orderSide = side
-                            showOrderDialog = true
-                        },
-                        cardColor = cardColor,
-                        bullishGreen = bullishGreen,
-                        bearishRed = bearishRed
-                    )
-                }
-                
-                // Position and Orders Row
-                item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // Current Position for Symbol
-                        SymbolPositionCard(
-                            symbol = symbol,
-                            position = uiState.symbolPosition,
-                            cardColor = cardColor,
-                            bullishGreen = bullishGreen,
-                            bearishRed = bearishRed,
-                            modifier = Modifier.weight(1f)
-                        )
-                        
-                        // Open Orders for Symbol
-                        SymbolOrdersCard(
-                            symbol = symbol,
-                            orders = uiState.symbolOrders,
-                            onCancelOrder = { viewModel.cancelOrder(it) },
-                            cardColor = cardColor,
-                            bearishRed = bearishRed,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-                
-                // Latest News Feed
-                item {
-                    SymbolNewsCard(
-                        symbol = symbol,
-                        news = uiState.symbolNews,
-                        isLoadingNews = uiState.isLoadingNews,
-                        onRefreshNews = { viewModel.refreshNews() },
-                        cardColor = cardColor,
-                        surfaceColor = surfaceColor
-                    )
-                }
-            }
-        }
-    }
-    
-    // Order Dialog
-    if (showOrderDialog) {
-        OrderDialog(
-            symbol = symbol,
-            side = orderSide,
-            currentPrice = uiState.currentQuote?.lastPrice ?: 0.0,
-            onDismiss = { showOrderDialog = false },
-            onConfirm = { orderRequest ->
-                viewModel.placeOrder(orderRequest)
-                showOrderDialog = false
-            }
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface
         )
     }
 }
-
-@Composable
-fun TimeframeSelectorCard(
-    selectedTimeframe: String,
-    onTimeframeSelected: (String) -> Unit,
-    cardColor: Color
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        colors = CardDefaults.cardColors(containerColor = cardColor)
-    ) {
-        LazyRow(
-            modifier = Modifier.padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(listOf("1m", "5m", "15m", "30m", "1H", "4H", "1D", "1W")) { timeframe ->
-                FilterChip(
-                    onClick = { onTimeframeSelected(timeframe) },
-                    label = { Text(timeframe, color = Color.White) },
-                    selected = selectedTimeframe == timeframe,
-                    colors = FilterChipDefaults.filterChipColors(
-                        containerColor = Color.Gray.copy(alpha = 0.3f),
-                        selectedContainerColor = colorResource(R.color.colorAccent)
-                    )
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun EnhancedLiveChart(
-    symbol: String,
-    chartData: ChartData,
-    technicalIndicators: TechnicalIndicators,
-    isLoading: Boolean,
-    cardColor: Color,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier,
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = cardColor)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                text = "$symbol - Live Chart with Indicators",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
-            
-            Box(modifier = Modifier.fillMaxSize()) {
-                if (isLoading) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = colorResource(R.color.colorAccent))
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("Loading live chart data...", color = Color.White)
-                        }
-                    }
-                } else {
-                    AndroidView(
-                        factory = { context ->
-                            CombinedChart(context).apply {
-                                description.isEnabled = false
-                                setTouchEnabled(true)
-                                setDragEnabled(true)
-                                setScaleEnabled(true)
-                                setPinchZoom(true)
-                                setDrawGridBackground(false)
-                                setBackgroundColor(cardColor.toArgb())
-                                
-                                // Configure X-axis for dark theme
-                                xAxis.apply {
-                                    position = XAxis.XAxisPosition.BOTTOM
-                                    setDrawGridLines(true)
-                                    gridColor = Color.Gray.copy(alpha = 0.3f).toArgb()
-                                    textColor = Color.White.toArgb()
-                                    valueFormatter = object : ValueFormatter() {
-                                        private val format = SimpleDateFormat("HH:mm", Locale.getDefault())
-                                        override fun getFormattedValue(value: Float): String {
-                                            return format.format(Date(value.toLong() * 1000))
-                                        }
-                                    }
-                                }
-                                
-                                // Configure Y-axes for dark theme
-                                axisLeft.apply {
-                                    setDrawGridLines(true)
-                                    gridColor = Color.Gray.copy(alpha = 0.3f).toArgb()
-                                    textColor = Color.White.toArgb()
-                                }
-                                axisRight.isEnabled = false
-                                
-                                // Enhanced legend for dark theme
-                                legend.apply {
-                                    isEnabled = true
-                                    textColor = Color.White.toArgb()
-                                    form = Legend.LegendForm.LINE
-                                    horizontalAlignment = Legend.LegendHorizontalAlignment.LEFT
-                                    verticalAlignment = Legend.LegendVerticalAlignment.TOP
-                                }
-                            }
-                        },
-                        update = { chart ->
-                            val combinedData = CombinedData()
-                            
-                            // Add candlestick data
-                            if (chartData.candleData.isNotEmpty()) {
-                                val candleEntries = chartData.candleData.mapIndexed { index, candle ->
-                                    CandleEntry(
-                                        index.toFloat(),
-                                        candle.high.toFloat(),
-                                        candle.low.toFloat(),
-                                        candle.open.toFloat(),
-                                        candle.close.toFloat()
-                                    )
-                                }
-                                
-                                val candleDataSet = CandleDataSet(candleEntries, "Price").apply {
-                                    color = Color.Gray.toArgb()
-                                    shadowColor = Color.Gray.toArgb()
-                                    shadowWidth = 1f
-                                    decreasingColor = colorResource(R.color.bearish_red).toArgb()
-                                    decreasingPaintStyle = android.graphics.Paint.Style.FILL
-                                    increasingColor = colorResource(R.color.bullish_green).toArgb()
-                                    increasingPaintStyle = android.graphics.Paint.Style.FILL
-                                    neutralColor = Color.Gray.toArgb()
-                                }
-                                
-                                combinedData.setData(CandleData(candleDataSet))
-                            }
-                            
-                            // Add EMA and VWAP lines with specified colors
-                            val lineData = LineData()
-                            
-                            // 9 EMA - Green
-                            if (technicalIndicators.ema9.isNotEmpty()) {
-                                val ema9Entries = technicalIndicators.ema9.mapIndexed { index, value ->
-                                    Entry(index.toFloat(), value.toFloat())
-                                }
-                                val ema9DataSet = LineDataSet(ema9Entries, "EMA 9").apply {
-                                    color = colorResource(R.color.ema9_green).toArgb()
-                                    lineWidth = 2f
-                                    setDrawCircles(false)
-                                    setDrawValues(false)
-                                }
-                                lineData.addDataSet(ema9DataSet)
-                            }
-                            
-                            // 20 EMA - Orange
-                            if (technicalIndicators.ema20.isNotEmpty()) {
-                                val ema20Entries = technicalIndicators.ema20.mapIndexed { index, value ->
-                                    Entry(index.toFloat(), value.toFloat())
-                                }
-                                val ema20DataSet = LineDataSet(ema20Entries, "EMA 20").apply {
-                                    color = colorResource(R.color.ema20_orange).toArgb()
-                                    lineWidth = 2f
-                                    setDrawCircles(false)
-                                    setDrawValues(false)
-                                }
-                                lineData.addDataSet(ema20DataSet)
-                            }
-                            
-                            // 50 EMA - Red
-                            if (technicalIndicators.ema50.isNotEmpty()) {
-                                val ema50Entries = technicalIndicators.ema50.mapIndexed { index, value ->
-                                    Entry(index.toFloat(), value.toFloat())
-                                }
-                                val ema

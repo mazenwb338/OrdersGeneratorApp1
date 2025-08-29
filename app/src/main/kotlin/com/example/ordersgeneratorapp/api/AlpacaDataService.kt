@@ -2,6 +2,7 @@ package com.example.ordersgeneratorapp.api
 
 import retrofit2.Response
 import retrofit2.http.*
+import com.google.gson.annotations.SerializedName
 
 interface AlpacaDataService {
     @GET("v2/stocks/{symbol}/snapshot")
@@ -46,8 +47,7 @@ interface AlpacaDataService {
         @Query("start") start: String,
         @Query("end") end: String,
         @Query("timeframe") timeframe: String = "1Day",
-        @Query("limit") limit: Int = 1000,
-        @Query("page_token") pageToken: String? = null
+        @Query("limit") limit: Int = 100
     ): Response<HistoricalBarsResponse>
 
     @GET("v1beta1/news")
@@ -61,6 +61,13 @@ interface AlpacaDataService {
         @Query("limit") limit: Int = 10,
         @Query("page_token") pageToken: String? = null
     ): Response<NewsResponse>
+
+    @GET("v2/stocks/{symbol}/bars")
+    suspend fun getBars(
+        @Path("symbol") symbol: String,
+        @Query("timeframe") timeframe: String,
+        @Query("limit") limit: Int
+    ): Response<BarsResponse>
 }
 
 // ✅ API Data models - keep only these, NO duplicates
@@ -130,6 +137,19 @@ data class HistoricalBarsResponse(
     val bars: List<Bar>,
     val symbol: String,
     val next_page_token: String?
+)
+
+data class BarsResponse(
+    @SerializedName("bars") val bars: List<BarDto>?
+)
+
+data class BarDto(
+    @SerializedName("t") val t: String,
+    @SerializedName("o") val o: Double,
+    @SerializedName("h") val h: Double,
+    @SerializedName("l") val l: Double,
+    @SerializedName("c") val c: Double,
+    @SerializedName("v") val v: Long
 )
 
 data class Snapshot(

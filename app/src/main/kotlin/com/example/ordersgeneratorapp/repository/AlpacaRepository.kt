@@ -16,6 +16,8 @@ import com.example.ordersgeneratorapp.data.AlpacaSettings
 import java.util.Collections
 import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 
 class AlpacaRepository private constructor(
     private val settingsManager: SettingsManager,
@@ -38,8 +40,41 @@ class AlpacaRepository private constructor(
         }
     }
 
-    private val alpacaDataService: AlpacaDataService 
-        get() = apiClient.dataApi
+    // Safe accessor (build fallback if apiClient not yet updated)
+    private var localDataApi: AlpacaDataService? = null
+    private fun dataApiOrNull(): AlpacaDataService? {
+        // First try the shared client if credentials registered
+        val shared = runCatching { apiClient.dataApi }.getOrNull()
+        if (shared != null) return shared
+
+        // Fallback: build once from locally stored creds
+        if (localDataApi == null && currentApiKey.isNotBlank() && currentSecretKey.isNotBlank()) {
+            Log.d(TAG, "Building fallback localDataApi (apiClient not yet configured)")
+            localDataApi = buildDataService(currentApiKey, currentSecretKey)
+        }
+        return localDataApi
+    }
+
+    private fun buildDataService(apiKey: String, secretKey: String): AlpacaDataService {
+        val auth = Interceptor { chain ->
+            val req = chain.request().newBuilder()
+                .addHeader("APCA-API-KEY-ID", apiKey)
+                .addHeader("APCA-API-SECRET-KEY", secretKey)
+                .addHeader("Content-Type", "application/json")
+                .build()
+            chain.proceed(req)
+        }
+        val http = OkHttpClient.Builder()
+            .addInterceptor(auth)
+            .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
+            .build()
+        val retrofit = Retrofit.Builder()
+            .baseUrl("https://data.alpaca.markets/")
+            .addConverterFactory(GsonConverterFactory.create())
+            .client(http)
+            .build()
+        return retrofit.create(AlpacaDataService::class.java)
+    }
 
     private var currentApiKey: String = ""
     private var currentSecretKey: String = ""
@@ -49,6 +84,41 @@ class AlpacaRepository private constructor(
     private val clientLock = Any()
 
     @Volatile private var lastConfiguredAccountId: String? = null
+
+    @Volatile private var autoConfigured = false
+    private fun configureIfNeeded(): Boolean {
+        if (isConfigured()) return true
+        if (autoConfigured) return isConfigured()
+        autoConfigured = true
+        return try {
+            val cs: ConnectionSettings = settingsManager.getConnectionSettings()
+            val acct = cs.brokerAccounts.firstOrNull {
+                it.isEnabled &&
+                    it.brokerType == "Alpaca" &&
+                    it.alpacaApiKey.isNotBlank() &&
+                    it.alpacaSecretKey.isNotBlank()
+            }
+            if (acct != null) {
+                Log.d(TAG, "Auto-config (broker account) id=${acct.id}")
+                configureFromBrokerAccount(acct)
+                return isConfigured()
+            }
+            if (cs.alpaca.apiKey.isNotBlank() && cs.alpaca.secretKey.isNotBlank()) {
+                Log.d(TAG, "Auto-config (legacy settings)")
+                configureCredentials(
+                    apiKey = cs.alpaca.apiKey,
+                    secretKey = cs.alpaca.secretKey,
+                    baseUrl = cs.alpaca.baseUrl.ifBlank { "https://paper-api.alpaca.markets/" }
+                )
+                return isConfigured()
+            }
+            Log.w(TAG, "Auto-config failed: no credentials found")
+            false
+        } catch (e: Exception) {
+            Log.e(TAG, "Auto-config exception: ${e.message}", e)
+            false
+        }
+    }
 
     private val hotkeyDedupWindowMs = 2000L
     private val recentHotkeyOrders = Collections.synchronizedMap(
@@ -115,29 +185,53 @@ class AlpacaRepository private constructor(
         return service
     }
 
-    fun isConfigured(): Boolean = currentApiKey.isNotBlank() && currentSecretKey.isNotBlank()
+    fun isConfigured(): Boolean =
+        apiClient.isConfigured() || (currentApiKey.isNotBlank() && currentSecretKey.isNotBlank())
 
     fun configureCredentials(apiKey: String, secretKey: String, baseUrl: String) {
         synchronized(clientLock) {
             currentApiKey = apiKey
             currentSecretKey = secretKey
             currentBaseUrl = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
+            val isPaper = currentBaseUrl.contains("paper")
+            // Sync shared apiClient so dataApi works
+            apiClient.updateSettings(
+                AlpacaSettings(
+                    apiKey = apiKey,
+                    secretKey = secretKey,
+                    baseUrl = currentBaseUrl,
+                    isPaper = isPaper
+                )
+            )
+            Log.d(TAG, "Configured credentials (isPaper=$isPaper) base=$currentBaseUrl keyPrefix=${apiKey.take(6)}")
             buildClients()
+            // Reset fallback so future calls use shared client
+            localDataApi = null
         }
     }
 
     fun configureFromBrokerAccount(acct: BrokerAccount) {
         if (acct.brokerType != "Alpaca") return
-        val base = (acct.alpacaBaseUrl.ifBlank { if (acct.alpacaIsPaper) "https://paper-api.alpaca.markets" else "https://api.alpaca.markets" })
-            .let { if (it.endsWith("/")) it else "$it/" }
+        val base = (acct.alpacaBaseUrl.ifBlank {
+            if (acct.alpacaIsPaper) "https://paper-api.alpaca.markets" else "https://api.alpaca.markets"
+        }).let { if (it.endsWith("/")) it else "$it/" }
         configureCredentials(
             apiKey = acct.alpacaApiKey,
             secretKey = acct.alpacaSecretKey,
             baseUrl = base
         )
+        // Also push settings to apiClient explicitly (already done in configureCredentials, keeps log clarity)
+        apiClient.updateSettings(
+            AlpacaSettings(
+                apiKey = acct.alpacaApiKey,
+                secretKey = acct.alpacaSecretKey,
+                baseUrl = base,
+                isPaper = acct.alpacaIsPaper || base.contains("paper")
+            )
+        )
         lastConfiguredAccountId = acct.id
-        Log.d(TAG, "Configured Alpaca acct=${acct.accountName} (${acct.id}) base=$base key=${acct.alpacaApiKey.take(4)}…")
-        Log.d(TAG, "AcctSwitch id=${acct.id} name=${acct.accountName} apiKeyPrefix=${acct.alpacaApiKey.take(8)}")
+        Log.d(TAG, "Configured Alpaca acct=${acct.accountName} id=${acct.id} base=$base key=${acct.alpacaApiKey.take(4)}… (data client ready)")
+        localDataApi = null
     }
 
     fun ensureConfiguredForFirstEnabledAccount(connectionSettings: ConnectionSettings) {
@@ -296,6 +390,24 @@ class AlpacaRepository private constructor(
         }
     }
 
+    // Order event stream (new / cancel / replace)
+    private val _orderEvents = MutableSharedFlow<OrderEvent>(extraBufferCapacity = 32)
+    val orderEvents: SharedFlow<OrderEvent> = _orderEvents
+
+    sealed class OrderEvent {
+        data class Created(val order: AlpacaOrder) : OrderEvent()
+        data class Canceled(val orderId: String, val success: Boolean) : OrderEvent()
+        data class Updated(val order: AlpacaOrder) : OrderEvent()
+    }
+
+    // Emit helper
+    private fun emitOrderCreated(order: AlpacaOrder) {
+        _orderEvents.tryEmit(OrderEvent.Created(order))
+    }
+    private fun emitOrderCanceled(orderId: String, ok: Boolean) {
+        _orderEvents.tryEmit(OrderEvent.Canceled(orderId, ok))
+    }
+
     public suspend fun createOrder(
         symbol: String,
         quantity: Int,
@@ -328,6 +440,7 @@ class AlpacaRepository private constructor(
             if (response.isSuccessful) {
                 response.body()?.let { order ->
                     Log.d(TAG, "API_SUCCESS orderId=${order.id} clientOrderId=${order.clientOrderId}")
+                    emitOrderCreated(order)
                     Result.success(order)
                 } ?: Result.failure(Exception("Empty response"))
             } else {
@@ -396,102 +509,144 @@ class AlpacaRepository private constructor(
         }
     }
 
+    // Single canonical market data fetch
     suspend fun getMarketData(symbol: String): Result<MarketData> = withContext(Dispatchers.IO) {
         try {
-            if (!isConfigured()) {
+            if (!configureIfNeeded()) {
                 return@withContext Result.failure(Exception("Alpaca API not configured"))
             }
-            
-            val quotesResponse = alpacaDataService.getLatestQuote(symbol)
-            val tradesResponse = alpacaDataService.getLatestTrade(symbol)
-            
-            val quote = if (quotesResponse.isSuccessful) {
-                quotesResponse.body()?.quote?.toLegacyQuote()
-            } else null
-            
-            val trade = if (tradesResponse.isSuccessful) {
-                tradesResponse.body()?.trade?.toLegacyTrade()
-            } else null
-            
-            val marketData = MarketData(
-                symbol = symbol,
-                quote = quote,
-                trade = trade,
-                timestamp = System.currentTimeMillis().toString()
+            val dataApi = dataApiOrNull()
+                ?: return@withContext Result.failure(Exception("Alpaca data API unavailable"))
+
+            Log.d(TAG, "Fetching market data for $symbol")
+
+            val quoteResp = dataApi.getLatestQuote(symbol)
+            val tradeResp = dataApi.getLatestTrade(symbol)
+
+            val legacyQuote = if (quoteResp.isSuccessful) quoteResp.body()?.quote?.toLegacyQuote() else null
+            val legacyTrade = if (tradeResp.isSuccessful) tradeResp.body()?.trade?.toLegacyTrade() else null
+
+            if (legacyQuote == null && legacyTrade == null) {
+                return@withContext Result.failure(
+                    IllegalStateException(
+                        "Empty quote/trade data for $symbol (HTTP ${quoteResp.code()}/${tradeResp.code()})"
+                    )
+                )
+            }
+
+            Result.success(
+                MarketData(
+                    symbol = symbol,
+                    quote = legacyQuote,
+                    trade = legacyTrade,
+                    timestamp = System.currentTimeMillis().toString()
+                )
             )
-            
-            Result.success(marketData)
         } catch (e: Exception) {
             Log.e(TAG, "Exception getting market data for $symbol: ${e.message}", e)
             Result.failure(e)
         }
     }
 
-    suspend fun cancelOrder(orderId: String): Result<String> = withContext(Dispatchers.IO) {
+    // Backwards compatibility wrapper
+    suspend fun getLatestQuote(symbol: String): Result<MarketData> = getMarketData(symbol)
+
+    // Batch fetch (single implementation)
+    suspend fun getLatestQuotes(symbols: List<String>): Map<String, Result<MarketData>> = withContext(Dispatchers.IO) {
+        if (!configureIfNeeded()) {
+            return@withContext symbols.associateWith {
+                Result.failure(IllegalStateException("Alpaca not configured"))
+            }
+        }
+        val dataApi = dataApiOrNull() ?: return@withContext symbols.associateWith {
+            Result.failure(IllegalStateException("Data API unavailable"))
+        }
+
+        val resultMap = mutableMapOf<String, Result<MarketData>>()
+        for (s in symbols) {
+            try {
+                val qResp = dataApi.getLatestQuote(s)
+                val tResp = dataApi.getLatestTrade(s)
+                val legacyQuote = if (qResp.isSuccessful) qResp.body()?.quote?.toLegacyQuote() else null
+                val legacyTrade = if (tResp.isSuccessful) tResp.body()?.trade?.toLegacyTrade() else null
+                if (legacyQuote == null && legacyTrade == null) {
+                    resultMap[s] = Result.failure(IllegalStateException("No data"))
+                } else {
+                    resultMap[s] = Result.success(
+                        MarketData(
+                            symbol = s,
+                            quote = legacyQuote,
+                            trade = legacyTrade,
+                            timestamp = System.currentTimeMillis().toString()
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Batch quote error for $s: ${e.message}")
+                resultMap[s] = Result.failure(e)
+            }
+        }
+        resultMap
+    }
+
+    // Provide cancelOrder expected by OrderHistoryScreen
+    suspend fun cancelOrder(orderId: String): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
-            Log.d(TAG, "Canceling order: $orderId")
-            
-            val response = tradingApi!!.cancelOrder(orderId)
-            
-            if (response.isSuccessful) {
-                Log.d(TAG, "Order canceled successfully: $orderId")
-                Result.success("Order canceled")
-            } else {
-                val errorBody = response.errorBody()?.string() ?: "Unknown error"
-                Log.e(TAG, "Failed to cancel order: ${response.code()} ${response.message()}, Body: $errorBody")
-                Result.failure(Exception("HTTP ${response.code()}: $errorBody"))
+            if (!isConfigured()) return@withContext Result.failure(Exception("Alpaca API not configured"))
+            val api = tradingApi ?: return@withContext Result.failure(Exception("Trading API not ready"))
+            Log.d(TAG, "Cancelling order $orderId")
+            val resp = api.cancelOrder(orderId)
+            val ok = resp.isSuccessful
+            emitOrderCanceled(orderId, ok)
+            if (ok) Result.success(true)
+            else {
+                val err = resp.errorBody()?.string() ?: "Unknown error"
+                Log.e(TAG, "Cancel failed $orderId HTTP ${resp.code()} $err")
+                Result.failure(Exception("Cancel failed: HTTP ${resp.code()} $err"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception canceling order: ${e.message}", e)
+            Log.e(TAG, "Cancel order exception $orderId: ${e.message}", e)
             Result.failure(e)
         }
     }
 
-    suspend fun getLatestQuote(symbol: String): Result<MarketData> {
-        return try {
-            Log.d("AlpacaRepository", "Getting latest quote for $symbol")
-            
-            val response = alpacaDataService.getSnapshot(symbol)
-            
-            if (response.isSuccessful && response.body() != null) {
-                val snapshotResponse = response.body()!!
-                Log.d("AlpacaRepository", "Latest quote loaded for $symbol")
-                
-                // ✅ FIX: Handle ask=0.0 issue with realistic fallbacks
-                val rawBidPrice = snapshotResponse.quote?.bp ?: 0.0
-                val rawAskPrice = snapshotResponse.quote?.ap ?: 0.0
-                val currentPrice = snapshotResponse.trade?.p ?: rawBidPrice
-                
-                val bidPrice = if (rawBidPrice > 0.0) rawBidPrice else currentPrice * 0.9995
-                val askPrice = when {
-                    rawAskPrice > 0.0 -> rawAskPrice
-                    rawBidPrice > 0.0 -> rawBidPrice + (currentPrice * 0.001)
-                    else -> currentPrice * 1.0005
-                }
-                
-                Log.d(TAG, "✅ FIXED_ASK_PRICE: $symbol bid=$bidPrice ask=$askPrice (raw_ask=$rawAskPrice)")
-                
-                val marketData = MarketData(
-                    symbol = symbol,
-                    quote = Quote(
-                        bidPrice = bidPrice.toString(),
-                        bidSize = snapshotResponse.quote?.bs?.toString() ?: "0",
-                        askPrice = askPrice.toString(),
-                        askSize = snapshotResponse.quote?.`as`?.toString() ?: "0",
-                        timestamp = snapshotResponse.quote?.t ?: ""
-                    ),
-                    trade = snapshotResponse.trade?.toLegacyTrade(),
-                    timestamp = System.currentTimeMillis().toString()
-                )
-                
-                Result.success(marketData)
+    // --- Candles / Bars support (add) ---
+    suspend fun getRecentBars(
+        symbol: String,
+        timeframe: String = "1Min",
+        limit: Int = 100
+    ): Result<List<CandleBar>> = withContext(Dispatchers.IO) {
+        try {
+            if (!configureIfNeeded()) return@withContext Result.failure(Exception("Not configured"))
+            val dataApi = dataApiOrNull() ?: return@withContext Result.failure(Exception("Data API unavailable"))
+            val resp = dataApi.getBars(symbol, timeframe = timeframe, limit = limit)
+            if (resp.isSuccessful) {
+                val bars = resp.body()?.bars ?: emptyList()
+                Result.success(bars.map {
+                    CandleBar(
+                        timestamp = it.t,
+                        open = it.o,
+                        high = it.h,
+                        low = it.l,
+                        close = it.c,
+                        volume = it.v
+                    )
+                })
             } else {
-                Log.e(TAG, "Failed to get latest quote for $symbol: ${response.message()}")
-                Result.failure(Exception("HTTP ${response.code()}: ${response.message()}"))
+                Result.failure(Exception("HTTP ${resp.code()}"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception getting latest quote for $symbol: ${e.message}", e)
             Result.failure(e)
         }
     }
 }
+
+// Data model for chart (app layer)
+data class CandleBar(
+    val timestamp: String,
+    val open: Double,
+    val high: Double,
+    val low: Double,
+    val close: Double,
+    val volume: Long
+)

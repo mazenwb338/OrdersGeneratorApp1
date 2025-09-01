@@ -33,6 +33,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -92,6 +93,9 @@ dependencies {
     // ✅ ADD: Hilt for dependency injection (if needed later)
     // implementation("com.google.dagger:hilt-android:2.48")
     // kapt("com.google.dagger:hilt-compiler:2.48")
+    
+    // Core library desugaring
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
     
     // Testing
     testImplementation("junit:junit:4.13.2")

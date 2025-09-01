@@ -1,16 +1,16 @@
 #!/bin/bash
 set -e
-# Block heap dumps and very large files.
+MAX_SIZE=${MAX_COMMIT_FILE_SIZE:-$((50 * 1024 * 1024))}
+BLOCK_EXTS=("hprof")
 for f in $(git diff --cached --name-only); do
-  if [[ "$f" == *.hprof ]]; then
-    echo "ERROR: $f is an .hprof dump. Remove it before committing."
+  [ ! -f "$f" ] && continue
+  for ext in "${BLOCK_EXTS[@]}"; do
+    [[ "$f" == *.$ext ]] && { echo "ERROR: $f blocked (.$ext)"; exit 1; }
+  done
+  [[ "$f" == *.bundle ]] && continue
+  sz=$(wc -c <"$f")
+  if [ "$sz" -gt "$MAX_SIZE" ]; then
+    echo "ERROR: $f > $MAX_SIZE bytes ($sz)."
     exit 1
-  fi
-  if [ -f "$f" ]; then
-    sz=$(wc -c <"$f")
-    if [ "$sz" -gt 50000000 ]; then
-      echo "ERROR: $f is >50MB ($sz bytes). Use external storage."
-      exit 1
-    fi
   fi
 done

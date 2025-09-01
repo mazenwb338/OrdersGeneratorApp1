@@ -3,9 +3,12 @@
     <cloud-backup>
         <include domain="sharedpref" path="."/>
         <exclude domain="sharedpref" path="device.xml"/>
+        <exclude domain="files" path="cache/" />
+        <exclude domain="database" path=":memory:" />
     </cloud-backup>
     <device-transfer>
         <include domain="sharedpref" path="."/>
         <exclude domain="sharedpref" path="device.xml"/>
+        <exclude domain="files" path="cache/" />
     </device-transfer>
 </data-extraction-rules>

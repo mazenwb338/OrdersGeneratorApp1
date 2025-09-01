@@ -98,3 +98,7 @@ app/build/
 java_pid*.hprof
 local.properties
 
+*.bundle
+
+# Backups
+backups/

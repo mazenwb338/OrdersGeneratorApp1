@@ -1,0 +1,16 @@
+#!/bin/bash
+set -e
+# Block heap dumps and very large files.
+for f in $(git diff --cached --name-only); do
+  if [[ "$f" == *.hprof ]]; then
+    echo "ERROR: $f is an .hprof dump. Remove it before committing."
+    exit 1
+  fi
+  if [ -f "$f" ]; then
+    sz=$(wc -c <"$f")
+    if [ "$sz" -gt 50000000 ]; then
+      echo "ERROR: $f is >50MB ($sz bytes). Use external storage."
+      exit 1
+    fi
+  fi
+done
